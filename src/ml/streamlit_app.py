@@ -1,0 +1,1177 @@
+"""Render the report payload. Computes nothing.
+
+This is the only module that runs in the browser, under Pyodide, so it may
+import the standard library, ``streamlit`` and ``plotly`` and nothing else —
+none of the rest of this package exists there. It reads ``payload.json`` from
+the virtual file system, which :mod:`ml.stlite` mounts from the JSON embedded
+in the page.
+
+Every number was decided before this file ran. All it does is walk the block
+tree and hand each block to Streamlit.
+"""
+
+import datetime
+import html
+import json
+import re
+from pathlib import Path
+
+import pandas as pd
+import plotly.graph_objects as go
+import streamlit as st
+import streamlit.components.v1 as components
+from plotly.subplots import make_subplots
+
+# pandas is here for one reason: a sortable table is a Streamlit data grid, and
+# a data grid wants a DataFrame. Streamlit installs it into the runtime itself,
+# so it is always present alongside streamlit and plotly.
+
+PAYLOAD = json.loads(Path("payload.json").read_text(encoding="utf-8"))
+
+# The look is the CAR-T manufacturing dashboard's (its dashboard-style skill): the
+# theme and fonts come from ml.stlite, the density rules below are the dashboard's
+# own, and the rest styles only this module's markup.
+CSS = """
+<style>
+[data-testid="stHeader"] {background: transparent; pointer-events: none;}
+[data-testid="stHeader"] button, [data-testid="stHeader"] a {pointer-events: auto;}
+[data-testid="stMainBlockContainer"] {padding: 0.75rem 3rem 1.5rem;}
+[data-testid="stSidebarHeader"] {height: 1.75rem; margin-bottom: 0; padding-top: 0.25rem;}
+[data-testid="stSidebarUserContent"] {padding: 0 1rem 1.5rem;}
+[data-testid="stVerticalBlock"] {gap: 0.6rem;}
+[data-testid="stSidebarUserContent"] [data-testid="stVerticalBlock"] {gap: 0.45rem;}
+[data-testid="stWidgetLabel"] {min-height: 1.1rem; margin-bottom: 0.1rem;}
+[data-testid="stWidgetLabel"] p {font-size: 0.85rem;}
+[data-testid^="stBaseButton"] {min-height: 1.9rem; padding: 0.1rem 0.7rem;}
+/* No CSV download in a data grid's toolbar; the page offers the downloads it means to. */
+[data-testid="stElementToolbarButton"]:has(button[aria-label="Download as CSV"]) {display: none;}
+
+.batch_table-name {font-size: 1rem; font-weight: 600; line-height: 1.35; margin: .3rem 0 .2rem;}
+.batch_table-title {font-size: 1.25rem; font-weight: 600; line-height: 1.4; margin: .4rem 0 0;}
+.batch_table-lead {font-size: .9rem; line-height: 1.45; margin: 0;}
+.batch_table-sub {font-size: .8rem; opacity: .65; margin: 0;}
+.batch_table-flag {color: #0047ab; font-weight: 600;}
+.batch_table-caption {font-size: .8rem; opacity: .65; margin-top: -.4rem;}
+.batch_table-scroll {overflow-x: auto; max-width: 100%; margin-bottom: .6rem;}
+.batch_table-scroll table {border-collapse: collapse; font-size: .85rem; border: none;}
+.batch_table-scroll th, .batch_table-scroll td {
+  padding: .25rem .6rem; text-align: left; vertical-align: top; border: none;
+  border-bottom: 1px solid #dee2e6; white-space: nowrap;
+}
+.batch_table-scroll th {font-weight: 600; font-size: .8rem; opacity: .75;
+                        border-bottom-color: #c3cad2;}
+.batch_table-scroll a {color: inherit;}
+
+/* Contents: the dashboard help page's docs-style navigation list. */
+.toc-head {font-size: .75rem; font-weight: 600; letter-spacing: .06em; text-transform: uppercase;
+           opacity: .6; margin: .6rem 0 .3rem .6rem;}
+.toc {display: flex; flex-direction: column; gap: 1px;
+       border-left: 1px solid rgba(44, 62, 80, .15);}
+.toc a {display: block; text-decoration: none !important; color: inherit !important;
+        padding: .22rem .6rem; border-left: 2px solid transparent; margin-left: -1px;
+        border-radius: 0 .25rem .25rem 0; line-height: 1.3; font-size: .85rem;}
+.toc a:hover {background: rgba(0, 102, 204, .08); color: #0066cc !important;
+              border-left-color: #0066cc;}
+.toc a.toc-l2 {font-weight: 600; margin-top: .45rem;}
+.toc a.toc-l2:first-child {margin-top: 0;}
+.toc a.toc-l3 {font-size: .8rem; padding-left: 1.3rem; opacity: .8;}
+.toc a.toc-l3:hover {opacity: 1;}
+.toc-none {font-size: .8rem; opacity: .6; padding-left: .6rem;}
+</style>
+"""
+
+# The data grid's own row height, passed to it rather than assumed, so the height
+# computed here and the height it draws are the same number. GUTTER is the slack
+# for the border and for the horizontal scrollbar, which is drawn inside the
+# element and would otherwise sit on top of the last row.
+ROW_HEIGHT = 35
+GUTTER = 20
+MAX_GRID_ROWS = 25
+
+_BOLD = re.compile(r"\*\*(.+?)\*\*")
+_CODE = re.compile(r"`([^`]+)`")
+_RED = re.compile(r":red\[(.+?)\]")
+_PLACEHOLDER = re.compile(r"\x00(\d+)\x00")
+
+
+def cell_html(text: str) -> str:
+    """One table cell: markdown in, safe HTML out.
+
+    Cells arrive as the small markdown dialect the report writes — bold, inline
+    code and a red span — with every character that came out of the data
+    backslash-escaped. Those escapes are parked before the patterns run, so a
+    parameter literally called ``Lact / E6 *`` can never turn into markup, and
+    restored as themselves afterwards.
+    """
+    parked: list[str] = []
+
+    def park(match: re.Match) -> str:
+        parked.append(match.group(1))
+        return f"\x00{len(parked) - 1}\x00"
+
+    # Park first, escape second: a parked "<" has to be escaped as itself on the
+    # way out, not as whatever escaping turned it into on the way in.
+    escaped = html.escape(re.sub(r"\\(.)", park, text), quote=False)
+    escaped = _RED.sub(r'<span class="batch_table-flag">\1</span>', escaped)
+    escaped = _BOLD.sub(r"<strong>\1</strong>", escaped)
+    escaped = _CODE.sub(r"<code>\1</code>", escaped)
+    return _PLACEHOLDER.sub(lambda m: html.escape(parked[int(m.group(1))], quote=False), escaped)
+
+
+def render_sortable(block: dict, key: str) -> None:
+    """A table as a data grid: click a header to reorder, type a word to filter.
+
+    The values arrive typed, so numeric columns sort as numbers rather than as
+    text. ``formats`` puts the display back where it was before the numbers were
+    kept raw.
+    """
+    frame = pd.DataFrame(block["rows"], columns=block["headers"])
+
+    column = block.get("filter")
+    if column in frame.columns:
+        keyword = st.text_input(
+            f"Filter by {column.lower()}",
+            key=f"filter{key}",
+            placeholder=f"a word in the {column} column",
+        )
+        if keyword:
+            # A word, not a pattern: a parameter name with "(%)" in it must match
+            # itself rather than blow up as a regular expression.
+            frame = frame[
+                frame[column].astype(str).str.contains(keyword, case=False, na=False, regex=False)
+            ].reset_index(drop=True)
+            if frame.empty:
+                st.caption(f"Nothing matches “{keyword}”.")
+                return
+
+    # A column with a number format is a number column: coerce it, so a cell
+    # with nothing in it is blank rather than the word "None".
+    config = {}
+    for header, fmt in zip(block["headers"], block["formats"]):
+        if not fmt:
+            continue
+        config[header] = st.column_config.NumberColumn(header, format=fmt)
+        if header in frame.columns:
+            frame[header] = pd.to_numeric(frame[header], errors="coerce")
+
+    data = frame
+    flag = block.get("flag") or {}
+    if flag.get("column") in frame.columns:
+        data = frame.style.map(
+            lambda v: (
+                "color: #0047ab; font-weight: 600"
+                if isinstance(v, (int, float)) and v == v and v < flag["below"]
+                else ""
+            ),
+            subset=[flag["column"]],
+        )
+
+    # Every row on screen up to a limit, then the grid scrolls on its own rather
+    # than pushing the rest of the section off the page.
+    shown = min(len(frame), MAX_GRID_ROWS)
+    st.dataframe(
+        data,
+        column_config=config,
+        hide_index=True,
+        width="stretch",
+        row_height=ROW_HEIGHT,
+        height=ROW_HEIGHT * (shown + 1) + GUTTER,
+    )
+    if block.get("note"):
+        st.markdown(
+            f'<p class="batch_table-caption">{cell_html(block["note"])}</p>',
+            unsafe_allow_html=True,
+        )
+
+
+def render_table(block: dict, key: str) -> None:
+    """A table in its own horizontally scrolling box, so the page never scrolls."""
+    if block.get("sort"):
+        render_sortable(block, key)
+        return
+
+    head = "".join(f"<th>{cell_html(h)}</th>" for h in block["headers"])
+    body = "".join(
+        "<tr>" + "".join(f"<td>{cell_html(c)}</td>" for c in row) + "</tr>" for row in block["rows"]
+    )
+    st.markdown(
+        f'<div class="batch_table-scroll"><table><thead><tr>{head}</tr></thead>'
+        f"<tbody>{body}</tbody></table></div>",
+        unsafe_allow_html=True,
+    )
+    if block.get("note"):
+        st.markdown(
+            f'<p class="batch_table-caption">{cell_html(block["note"])}</p>',
+            unsafe_allow_html=True,
+        )
+
+
+MISSING_LEGEND = """<b style="background:#d3d2cc;margin-left:0"></b>measured
+  <b style="background:#0047ab"></b>missing
+  <b style="background:#2e8b57"></b>missing, batch not in the statistics
+  &nbsp;·&nbsp; one cell per batch, newest on the right; scroll left to go back in time;
+  ⊘ marks a parameter this report screened out at this site, ◇ one the correlation
+  report did"""
+
+# The pattern strip: a fixed size per batch, so a long history scrolls sideways
+# instead of being squeezed to the page. Drawn on a canvas in its own frame,
+# which keeps thousands of cells cheap and the hover immediate.
+CELL, ROW, LABELS = 5, 16, 280
+STRIP = """
+<style>
+  body { margin: 0; font: 12px "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+         color: #5d6d7e; }
+  #wrap { display: flex; }
+  #names { flex: none; width: %(labels)dpx; }
+  #names div { height: %(row)dpx; line-height: %(row)dpx; margin-bottom: 2px; padding-right: 8px;
+               overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+  #scroll { overflow-x: auto; flex: 1; }
+  canvas { display: block; }
+  #tip { position: fixed; display: none; pointer-events: none; padding: 4px 7px; border-radius: 4px;
+         background: #2c3e50; color: #fff; white-space: nowrap; font-size: 12px; }
+  #legend { margin: 0 0 6px %(labels)dpx; }
+  #legend b { display: inline-block; width: 10px; height: 10px; margin: 0 4px 0 10px;
+              vertical-align: -1px; border-radius: 2px; }
+</style>
+<div id="legend">%(legend)s</div>
+<div id="wrap"><div id="names"></div><div id="scroll"><canvas id="c"></canvas></div></div>
+<div id="tip"></div>
+<script>
+const D = %(data)s, W = %(cell)d, H = %(row)d, GAP = 2, AXIS = 22;
+const n = D.batches.length, step = W + 1, ratio = window.devicePixelRatio || 1;
+const canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
+// A missing pattern is "1" for missing.
+const fill = (c, i) =>
+  c !== "1" ? "#d3d2cc" : !D.analysed || D.analysed[i] === "1" ? "#0047ab" : "#2e8b57";
+const state = (row, i) =>
+  (row.bits[i] === "1" ? "missing" : "measured") +
+  (D.analysed && D.analysed[i] !== "1" ? " (not in the statistics)" : "");
+const width = n * step, height = D.rows.length * (H + GAP) + AXIS;
+canvas.width = width * ratio; canvas.height = height * ratio;
+canvas.style.width = width + "px"; canvas.style.height = height + "px";
+ctx.scale(ratio, ratio);
+const names = document.getElementById("names");
+D.rows.forEach((row, r) => {
+  const label = document.createElement("div");
+  label.textContent = row.name; label.title = row.name; names.appendChild(label);
+  for (let i = 0; i < n; i++) {
+    ctx.fillStyle = fill(row.bits[i], i);
+    ctx.fillRect(i * step, r * (H + GAP), W, H);
+  }
+});
+// A date under the strip wherever the month changes, with room between labels.
+ctx.fillStyle = "#5d6d7e"; ctx.font = "11px system-ui, sans-serif";
+let last = -1e9, month = "";
+if (D.axis) D.dates.forEach((date, i) => {
+  const m = (date || "").slice(0, 7);
+  if (m && m !== month && i * step - last > 70) {
+    ctx.fillRect(i * step, D.rows.length * (H + GAP), 1, 4);
+    ctx.fillText(m, i * step + 2, D.rows.length * (H + GAP) + 15);
+    last = i * step;
+  }
+  if (m) month = m;
+});
+const tip = document.getElementById("tip");
+canvas.addEventListener("mousemove", (e) => {
+  const i = Math.floor(e.offsetX / step), r = Math.floor(e.offsetY / (H + GAP));
+  if (i < 0 || i >= n || r < 0 || r >= D.rows.length) { tip.style.display = "none"; return; }
+  const row = D.rows[r];
+  tip.textContent = D.batches[i] + (D.dates[i] ? " · " + D.dates[i] : "") + " · " + row.name +
+    ": " + state(row, i);
+  tip.style.display = "block";
+  const left = e.clientX + 12;
+  tip.style.left = Math.min(left, window.innerWidth - tip.offsetWidth - 4) + "px";
+  tip.style.top = (e.clientY + 14) + "px";
+});
+canvas.addEventListener("mouseleave", () => { tip.style.display = "none"; });
+// Open on the most recent batches.
+const scroller = document.getElementById("scroll");
+if (D.axis) scroller.scrollLeft = scroller.scrollWidth;
+</script>
+"""
+
+
+#: The background of the row that is drawn: the theme's blue, faint.
+PLOTTED = "background-color: rgba(0, 102, 204, .12)"
+
+
+def _clicked(key: str, plot: str) -> None:
+    """A click on a cell draws its row: remember which table and row, the last click wins.
+
+    A click in one table clears the clicked cell in the others.
+    """
+    cells = [tuple(c) for c in st.session_state[key]["selection"].get("cells", [])]
+    before = st.session_state.get(f"cells{key}", [])
+    st.session_state[f"cells{key}"] = cells
+    if cells == before:  # a box ticked, no cell clicked
+        return
+    if not cells:
+        if (st.session_state.get(plot) or ("",))[0] == key:
+            st.session_state[plot] = None
+        return
+    st.session_state[plot] = (key, cells[0][0])
+    for other in st.session_state.get(f"tables{plot}", ()):
+        selection = (st.session_state.get(other) or {}).get("selection") or {}
+        if other != key and selection.get("cells"):
+            rows = list(selection.get("rows", []))
+            st.session_state[other] = {"selection": {"rows": rows, "columns": [], "cells": []}}
+            st.session_state[f"cells{other}"] = []
+
+
+def _pick_table(headers, rows, formats, key: str, plot: str, tick: bool = True):
+    """A data grid: click a row to draw it, tick rows for a proposal.
+
+    Returns the frame and the ticked row numbers. The drawn row is shaded.
+    """
+    frame = pd.DataFrame(rows, columns=headers)
+    config = {}
+    for header, fmt in zip(headers, formats):
+        if fmt:
+            config[header] = st.column_config.NumberColumn(header, format=fmt)
+            frame[header] = pd.to_numeric(frame[header], errors="coerce")
+    st.session_state.setdefault(f"tables{plot}", set()).add(key)
+    data, shown = frame, st.session_state.get(plot)
+    if shown and shown[0] == key:
+        data = frame.style.apply(
+            lambda row: [PLOTTED if row.name == shown[1] else ""] * len(row), axis=1
+        )
+    event = st.dataframe(
+        data,
+        column_config=config,
+        hide_index=True,
+        width="stretch",
+        row_height=ROW_HEIGHT,
+        height=ROW_HEIGHT * (min(len(frame), MAX_GRID_ROWS) + 1) + GUTTER,
+        on_select=lambda: _clicked(key, plot),
+        selection_mode=["multi-row", "single-cell"] if tick else "single-cell",
+        key=key,
+    )
+    return frame, event.selection.rows
+
+
+def _drawn(plot: str, draw: dict) -> list:
+    """The parameters of the row clicked last, from ``draw``: table key → row → parameters."""
+    shown = st.session_state.get(plot)
+    if not shown or shown[0] not in draw:
+        return []
+    try:
+        return draw[shown[0]](shown[1])
+    except IndexError:  # the table changed under the click
+        return []
+
+
+def proposal_rows(
+    picked: list,
+    group_of: dict,
+    screened: dict,
+    site: str,
+    action: str,
+    reason: str,
+    rationale: str,
+    author: str,
+    represented_by: str = "",
+    report: str = "",
+) -> tuple:
+    """The proposal rows for the ticked parameters, and the ones that cannot be in it.
+
+    One row per parameter, with its group as context, in the columns
+    ``ml screening add`` reads, made in ``report``. Only a parameter this report
+    screened out at this site can be reinstated; the others are returned as
+    skipped. An exclusion with ``represented_by`` leaves that parameter out of it:
+    it stays, for the others.
+    """
+    represented_by = represented_by if action == "exclude" else ""
+    rows, skipped = [], []
+    for parameter in picked:
+        if parameter == represented_by:
+            continue
+        if action == "reinstate" and parameter not in screened:
+            skipped.append(parameter)
+            continue
+        rows.append(
+            {
+                "Action": action,
+                "Parameter": parameter,
+                "Group": group_of.get(parameter, ""),
+                "Site": site,
+                "Reason": reason,
+                "Rationale": rationale.strip(),
+                "Author": author.strip(),
+                "Represented by": represented_by,
+                "Report": report,
+            }
+        )
+    return rows, skipped
+
+
+def render_proposal(
+    form: dict, site: dict, picked: list, key: str, groups: list = (), pairs: list = ()
+) -> None:
+    """Turn the ticked rows into a proposal.csv for `ml screening add`.
+
+    ``picked`` are parameters to exclude or reinstate. In the correlation report each
+    of ``groups`` is excluded but for the member that represents it, and each
+    (parameter, closest parameter) of ``pairs`` excludes the closest, represented by
+    the parameter.
+    """
+    group_of = {m: g for g, members in site["groups"].items() for m in members}
+    screened = site["screened"]
+    elsewhere = site.get("elsewhere") or {}
+    report = form.get("report", "")
+    ticked = len(picked) + len(groups) + len(pairs)
+    with st.expander(f"Propose a screening decision ({ticked} ticked)", expanded=False):
+        if not ticked:
+            st.caption(
+                "Tick groups or parameters in the tables above, with the box at the start of "
+                "a row; they are what the proposal is about."
+            )
+            return
+        represented = []  # (members, the one that represents the others)
+        if groups or pairs:
+            st.markdown(f"Exclude as *{form['reason']}*, represented by the parameter named:")
+            for group in groups:
+                # A group lists its suggested representative first.
+                members = site["groups"][group]
+                chosen = st.selectbox(f"{group}: represented by", members, key=f"rep{key}-{group}")
+                represented.append((members, chosen))
+            if pairs:
+                st.markdown("".join(f"\n- {c} → represented by **{p}**" for p, c in pairs))
+            represented += [([p, c], p) for p, c in pairs]
+        action = reason = ""
+        if picked:
+            kept = st.multiselect("Leave out of the proposal", picked, key=f"keep{key}")
+            picked = [p for p in picked if p not in kept]
+            left, right = st.columns(2)
+            action = left.radio("Action", form["actions"], horizontal=True, key=f"act{key}")
+            reason = right.selectbox(
+                "Reason",
+                form["reasons"],
+                index=form["reasons"].index(form["reason"]) if form.get("reason") else 0,
+                key=f"why{key}",
+            )
+        rationale = st.text_area("Rationale: why, in words (optional)", key=f"text{key}")
+        author = st.text_input("Author", key=f"who{key}")
+        if not author.strip():
+            st.info("Fill in an author to write the proposal.")
+            return
+        common = (group_of, screened, site["label"])
+        rows, done, blocked = [], [], []
+        for members, instead in represented:
+            if instead in elsewhere:
+                # A representative that is excluded would leave the group out whole.
+                blocked.append(instead)
+                continue
+            if instead in screened:
+                # Moving the group to it: it comes back, and stands in for the others.
+                rows += proposal_rows(
+                    [instead], *common, "reinstate", form["reason"], rationale, author, "", report
+                )[0]
+            done += [m for m in members if screened.get(m, {}).get("Represented by") == instead]
+            fresh = [m for m in members if m not in done]
+            rows += proposal_rows(
+                fresh, *common, "exclude", form["reason"], rationale, author, instead, report
+            )[0]
+        if blocked:
+            st.warning(
+                "Excluded in the missingness report, so it cannot represent others — pick "
+                "another representative (see *Best usable representative*): " + ", ".join(blocked)
+            )
+        if done:
+            st.caption("Already in the register, so left out: " + ", ".join(done))
+        skipped = []
+        if picked:
+            more, skipped = proposal_rows(
+                picked, *common, action, reason, rationale, author, "", report
+            )
+            rows += more
+        if skipped:
+            st.warning(
+                "Not screened out at this site by this report, so nothing to reinstate here: "
+                + ", ".join(skipped)
+            )
+        if not rows:
+            return
+        frame = pd.DataFrame(rows, columns=form["columns"])
+        st.dataframe(frame, hide_index=True, width="stretch")
+        st.download_button(
+            f"Download proposal.csv ({len(rows)} rows)",
+            data=frame.to_csv(index=False),
+            file_name="proposal.csv",
+            mime="text/csv",
+            key=f"prop{key}",
+        )
+        st.markdown(
+            '<p class="batch_table-caption">Then: <code>uv run ml screening add proposal.csv'
+            "</code>. It checks every row against the latest build before it adds any.</p>",
+            unsafe_allow_html=True,
+        )
+
+
+#: Shown above the tables until a row is clicked.
+CLICK_A_ROW = "Click a row in a table below to draw it here."
+
+
+def _pick_site(label: str, labels: list, key: str) -> str:
+    """The site (or plant) the viewer shows: picked in the sidebar, or named when it is the
+    only one."""
+    with SLOTS.get("site") or st.sidebar:
+        if len(labels) == 1:
+            st.markdown(f"**{html.escape(label)}:** {html.escape(str(labels[0]))}")
+            return labels[0]
+        return st.radio(label, labels, horizontal=True, key=f"site{key}")
+
+
+def render_missing_viewer(block: dict, key: str) -> None:
+    """The plot on top; below it the groups and the parameters: click one to draw it.
+
+    A ``rank_viewer`` draws scatterplots of the parameters instead of the strip,
+    from each site's ``values``.
+    """
+    mode = "rank" if block["kind"] == "rank_viewer" else "missing"
+    together = "that rank the batches alike" if mode == "rank" else "missing together"
+    labels = [site["label"] for site in block["sites"]]
+    chosen = _pick_site(block.get("site_label") or "Site", labels, key)
+    site = block["sites"][labels.index(chosen)]
+    screened = site.get("screened") or {}
+    elsewhere = site.get("elsewhere") or {}
+    other = "the missingness report" if mode == "rank" else "the correlation report"
+    if site.get("conflicts"):
+        st.warning(
+            "⚠ **Screening conflict** — a representative that is excluded itself leaves its "
+            "whole group out:\n\n" + "\n".join(f"- {line}" for line in site["conflicts"])
+        )
+    top = st.container()
+    plot = f"plot{key}-{chosen}"
+    draw: dict = {}
+
+    picked: list[str] = []
+    groups_ticked: list[str] = []
+    with st.expander(f"Groups of parameters {together} ({len(site['groups'])})", expanded=True):
+        if site["groups"]:
+            table = f"groups{key}-{chosen}"
+            groups, ticked = _pick_table(
+                site["group_headers"],
+                site["group_rows"],
+                site["group_formats"],
+                table,
+                plot,
+            )
+            names = [groups.iloc[i]["Group"] for i in ticked]
+            if mode == "rank":
+                groups_ticked = names
+            else:
+                picked += [m for name in names for m in site["groups"][name]]
+            draw[table] = lambda i: site["groups"][groups.iloc[i]["Group"]]
+            st.markdown(
+                '<p class="batch_table-caption">Click a group to draw all its parameters; tick '
+                "groups to propose a screening decision. <i>Excluded here</i> counts the members "
+                f"this report already screened out, <i>Excluded elsewhere</i> the ones {other} "
+                "did.</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption(f"No group of parameters {together} at this site.")
+    with st.expander(f"Screened out at this site ({len(screened)})", expanded=bool(screened)):
+        if screened:
+            headers = ["Parameter", *next(iter(screened.values()))]
+            rows = [[name, *decision.values()] for name, decision in screened.items()]
+            table = f"screened{key}-{chosen}"
+            listed, ticked = _pick_table(headers, rows, [None] * len(headers), table, plot)
+            picked += [listed.iloc[i]["Parameter"] for i in ticked]
+            draw[table] = lambda i: [listed.iloc[i]["Parameter"]]
+            st.markdown(
+                '<p class="batch_table-caption">The standing exclusions this report made at '
+                "this site (⊘). Every task leaves these out. Click one to draw it; tick them to "
+                "reinstate them.</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("This report has screened nothing out at this site.")
+    with st.expander(f"Screened out by {other} ({len(elsewhere)})", expanded=False):
+        if elsewhere:
+            headers = ["Parameter", *next(iter(elsewhere.values()))]
+            rows = [[name, *decision.values()] for name, decision in elsewhere.items()]
+            table = f"elsewhere{key}-{chosen}"
+            listed, _ = _pick_table(headers, rows, [None] * len(headers), table, plot, tick=False)
+            draw[table] = lambda i: [listed.iloc[i]["Parameter"]]
+            st.markdown(
+                '<p class="batch_table-caption">The standing exclusions '
+                f"{other} made at this site (◇). Every task leaves these out too; reinstate "
+                "them there.</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption(f"{other[0].upper() + other[1:]} has screened nothing out at this site.")
+    pairs: list[tuple] = []
+    with st.expander(f"Parameters in no group ({len(site['rows'])})", expanded=mode == "rank"):
+        table = f"rows{key}-{chosen}"
+        frame, ticked = _pick_table(site["headers"], site["rows"], site["formats"], table, plot)
+        if mode == "rank":
+            # Each ticked parameter with its closest; a click draws the two.
+            pairs = [
+                (r["Parameter"], r["Closest parameter"])
+                for r in (frame.iloc[i] for i in ticked)
+                if r["Closest parameter"]
+            ]
+            draw[table] = lambda i: [
+                p for p in (frame.iloc[i]["Parameter"], frame.iloc[i]["Closest parameter"]) if p
+            ]
+        else:
+            picked += [frame.iloc[i]["Parameter"] for i in ticked]
+            draw[table] = lambda i: [frame.iloc[i]["Parameter"]]
+        st.markdown(
+            '<p class="batch_table-caption">'
+            + (
+                "Click a parameter to draw it against its closest parameter; tick parameters "
+                "to keep each and exclude its closest. "
+                if mode == "rank"
+                else "Click a parameter to draw it; tick parameters to propose a screening "
+                "decision. "
+            )
+            + "The ones in a group are in the group table. Sort by a column header; search "
+            "with the magnifier at the table's top right.</p>",
+            unsafe_allow_html=True,
+        )
+
+    if mode == "rank" and site.get("not_analysed"):
+        with st.expander(f"Not compared ({len(site['not_analysed'])})", expanded=False):
+            st.dataframe(
+                pd.DataFrame(site["not_analysed"], columns=["Parameter", "Why"]),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption("Catalog parameters that take no part here, and why.")
+
+    picked = list(dict.fromkeys(picked))
+    if block.get("proposal"):
+        render_proposal(block["proposal"], site, picked, f"{key}-{chosen}", groups_ticked, pairs)
+    n = len(site["batches"])
+    with top:
+        drawn = _drawn(plot, draw)
+        if not drawn:
+            st.caption(CLICK_A_ROW)
+            return
+        with st.spinner("Drawing…"):
+            if mode == "rank":
+                render_pairs(site, drawn, f"{key}-{chosen}")
+                return
+            # A parameter with no blank at this site has no pattern stored: all measured.
+            bits = [site["patterns"].get(p, "0" * n) for p in drawn]
+            names = [_marked(p, site) for p in drawn]
+            data = {
+                "batches": site["batches"],
+                "dates": site["dates"],
+                "analysed": site.get("in_statistics") or "",
+                "axis": True,
+                "rows": [{"name": name, "bits": b} for name, b in zip(names, bits)],
+            }
+            page = STRIP % {
+                "legend": MISSING_LEGEND,
+                "data": json.dumps(data).replace("<", "\\u003c"),
+                "cell": CELL,
+                "row": ROW,
+                "labels": LABELS,
+            }
+            components.html(page, height=len(drawn) * (ROW + 2) + 22 + 40, scrolling=False)
+
+
+#: Up to this many parameters a group is drawn as every pair; beyond, the labels do not fit.
+ALL_PAIRS = 4
+#: Panels per row, and an axis title's length.
+PANELS, TITLE = 3, 48
+
+
+def _short(text: str) -> str:
+    return text if len(text) <= TITLE else text[: TITLE - 1] + "…"
+
+
+def _marked(parameter: str, site: dict) -> str:
+    """A parameter's name, marked ⊘ when this report excludes it, ◇ when the other one does."""
+    if parameter in (site.get("screened") or {}):
+        return "⊘ " + parameter
+    if parameter in (site.get("elsewhere") or {}):
+        return "◇ " + parameter
+    return parameter
+
+
+def render_pairs(site: dict, drawn: list, key: str) -> None:
+    """Scatterplots of the parameters drawn, one dot per batch, as SVG (no WebGL needed).
+
+    Two parameters make one plot. A small group shows every pair. A larger one shows
+    one parameter (the representative, unless the reader picks another) against
+    each of the others.
+    """
+    shown = [p for p in drawn if p in site["values"]]
+    if len(shown) < 2:
+        st.caption("Tick at least two parameters of a group to draw them against each other.")
+        return
+    label = {p: _marked(p, site) for p in shown}
+    if len(shown) <= ALL_PAIRS:
+        pairs = [(x, y) for i, x in enumerate(shown) for y in shown[i + 1 :]]
+    else:
+        x = st.selectbox(
+            "Against",
+            shown,
+            format_func=label.get,
+            key=f"against{key}",
+            help="Each plot puts this parameter on the x-axis; the first is the representative.",
+        )
+        pairs = [(x, y) for y in shown if y != x]
+    cols = min(PANELS, len(pairs))
+    rows = -(-len(pairs) // cols)
+    figure = make_subplots(
+        rows=rows,
+        cols=cols,
+        vertical_spacing=min(0.35 / rows, 0.15),
+        horizontal_spacing=0.12 if cols > 1 else 0.0,
+    )
+    for i, (x, y) in enumerate(pairs):
+        at = {"row": i // cols + 1, "col": i % cols + 1}
+        figure.add_trace(
+            go.Scatter(
+                x=site["values"][x],
+                y=site["values"][y],
+                mode="markers",
+                marker={"size": 5, "color": "#0047ab", "opacity": 0.6},
+                text=site["batches"],
+                hovertemplate=f"%{{text}}<br>{x}: %{{x}}<br>{y}: %{{y}}<extra></extra>",
+            ),
+            **at,
+        )
+        figure.update_xaxes(title_text=_short(label[x]), title_font_size=11, **at)
+        figure.update_yaxes(title_text=_short(label[y]), title_font_size=11, **at)
+    figure.update_layout(
+        height=(260 if cols > 1 else 380) * rows + 20,
+        showlegend=False,
+        margin={"l": 60, "r": 10, "t": 10, "b": 10},
+    )
+    st.plotly_chart(figure, width="stretch", key=f"pairs{key}")
+    st.markdown(
+        '<p class="batch_table-caption">One dot per batch with a value for both. In a group '
+        "the first parameter is its suggested representative; ⊘ marks one this report "
+        "already excludes here, ◇ one the missingness report does.</p>",
+        unsafe_allow_html=True,
+    )
+
+
+#: The two shades a row's groups alternate between: they only tell neighbours apart.
+SHADES = ("#0047ab", "#9db9e6")
+
+
+def render_timeline(segments: dict, drawn: list, key: str) -> None:
+    """One row per parameter, one bar per group: its value from its first day to its last.
+
+    A day two groups share, the day a lot changes, is split between them at noon.
+    """
+    day, half = datetime.timedelta(days=1), datetime.timedelta(hours=12)
+    bars = []  # parameter, shade, start, end, group
+    for p in drawn:
+        groups = segments[p]
+        for i, g in enumerate(groups):
+            shared_first = i > 0 and groups[i - 1][1] == g[0]
+            shared_last = i + 1 < len(groups) and groups[i + 1][0] == g[1]
+            start = datetime.datetime.fromisoformat(g[0]) + (half if shared_first else 0 * day)
+            end = datetime.datetime.fromisoformat(g[1]) + day - (half if shared_last else 0 * day)
+            bars.append((p, i % 2, start, end, g))
+    figure = go.Figure()
+    for shade in (0, 1):
+        mine = [bar for bar in bars if bar[1] == shade]
+        figure.add_trace(
+            go.Bar(
+                orientation="h",
+                y=[p for p, *_ in mine],
+                base=[start for _, _, start, _, _ in mine],
+                x=[(end - start).total_seconds() * 1000 for _, _, start, end, _ in mine],
+                text=[g[2] for *_, g in mine],
+                customdata=[[g[0], g[1], g[3]] for *_, g in mine],
+                textposition="inside",
+                insidetextanchor="middle",
+                marker={"color": SHADES[shade]},
+                hovertemplate="%{y}<br><b>%{text}</b><br>%{customdata[0]} to %{customdata[1]}"
+                " · %{customdata[2]} batches<extra></extra>",
+            )
+        )
+    # Where the first row changes value: the rows that change with it line up here.
+    for start in [bar[2] for bar in bars if bar[0] == drawn[0]][1:]:
+        figure.add_shape(
+            type="line",
+            x0=start,
+            x1=start,
+            yref="paper",
+            y0=0,
+            y1=1,
+            layer="below",
+            line={"color": "#c3cad2", "width": 1},
+        )
+    figure.update_layout(
+        barmode="overlay",
+        bargap=0.3,
+        showlegend=False,
+        height=30 * len(drawn) + 80,
+        margin={"l": 10, "r": 10, "t": 30, "b": 10},
+        uniformtext={"minsize": 9, "mode": "hide"},
+        xaxis={"type": "date", "showgrid": False},
+        yaxis={"autorange": "reversed", "automargin": True, "showgrid": False},
+    )
+    st.plotly_chart(figure, width="stretch", key=f"timeline{key}")
+
+
+def render_shift_viewer(block: dict, key: str) -> None:
+    """The groups over time of the row clicked; below, the groups and parameters to click."""
+    labels = [site["label"] for site in block["sites"]]
+    chosen = _pick_site(block["site_label"], labels, key)
+    site = block["sites"][labels.index(chosen)]
+    top = st.container()
+    plot = f"plot{key}-{chosen}"
+    draw: dict = {}
+
+    together = "Groups of parameters that change on the same days"
+    with st.expander(f"{together} ({len(site['groups'])})", expanded=True):
+        if site["groups"]:
+            table = f"groups{key}-{chosen}"
+            groups, _ = _pick_table(
+                site["group_headers"],
+                site["group_rows"],
+                site["group_formats"],
+                table,
+                plot,
+                tick=False,
+            )
+            draw[table] = lambda i: site["groups"][groups.iloc[i]["Group"]]
+            st.caption("Click a group to draw its parameters.")
+        else:
+            st.caption("No two parameters change on the same days at this site.")
+    with st.expander(f"Parameters that run in groups over time, in no group ({len(site['rows'])})"):
+        if site["rows"]:
+            table = f"rows{key}-{chosen}"
+            frame, _ = _pick_table(
+                site["headers"], site["rows"], site["formats"], table, plot, tick=False
+            )
+            draw[table] = lambda i: [frame.iloc[i]["Parameter"]]
+            st.caption(
+                "Click a parameter to draw it. The ones in a group are in the group table. Sort "
+                "by a column header; search with the magnifier at the table's top right."
+            )
+        else:
+            st.caption("Every parameter that runs in groups over time is in a group above.")
+    st.markdown(
+        '<p class="batch_table-caption"><code>uv run ml task new &lt;folder&gt; '
+        "--exclude-shifting</code> lists every parameter in these two tables, at any site, "
+        "under <code>predictors.exclude</code> in the new task file, with why.</p>",
+        unsafe_allow_html=True,
+    )
+    with top:
+        drawn = list(dict.fromkeys(_drawn(plot, draw)))
+        if not drawn:
+            st.caption(CLICK_A_ROW)
+            return
+        with st.spinner("Drawing…"):
+            render_timeline(site["segments"], drawn, f"{key}-{chosen}")
+        st.markdown(
+            '<p class="batch_table-caption">One bar per group: one value, from the first day it '
+            "was used to the last. A row's bars alternate dark and light only to tell "
+            "neighbours apart; a blank stretch has no value. Grey lines: the days the first row "
+            "changes value.</p>",
+            unsafe_allow_html=True,
+        )
+
+
+def render_block(block: dict, key: str) -> None:
+    kind = block["kind"]
+    if kind == "md":
+        st.markdown(block["text"])
+    elif kind == "table":
+        render_table(block, key)
+    elif kind == "figure":
+        with st.spinner("Drawing…"):
+            st.plotly_chart(go.Figure(block["spec"]), width="stretch", key=f"fig{key}")
+        if block.get("caption"):
+            st.markdown(
+                f'<p class="batch_table-caption">{html.escape(block["caption"])}</p>',
+                unsafe_allow_html=True,
+            )
+    elif kind == "image":
+        st.markdown(
+            f'<img src="{block["src"]}" alt="{html.escape(block.get("alt", ""))}" '
+            'style="max-width:100%">',
+            unsafe_allow_html=True,
+        )
+    elif kind == "code":
+        if block.get("label"):
+            st.markdown(f"**{block['label']}**")
+        st.code(block["text"], language=block.get("language") or "text")
+    elif kind == "download":
+        st.download_button(
+            block["label"],
+            data=block["text"],
+            file_name=block["filename"],
+            mime="text/csv" if block["filename"].endswith(".csv") else "application/json",
+            key=f"dl{key}",
+        )
+        if block.get("note"):
+            st.markdown(
+                f'<p class="batch_table-caption">{cell_html(block["note"])}</p>',
+                unsafe_allow_html=True,
+            )
+    elif kind == "collapsed":
+        with st.expander(block["label"], expanded=False):
+            for i, child in enumerate(block["blocks"]):
+                render_block(child, f"{key}-{i}")
+    elif kind == "deferred":
+        # An expander runs its contents whether or not it is open, so the figures
+        # inside one wait behind a toggle instead: nothing is drawn until asked for.
+        with st.expander(block["label"], expanded=False):
+            if st.toggle(block.get("hint") or "Show", key=f"show{key}"):
+                for i, child in enumerate(block["blocks"]):
+                    render_block(child, f"{key}-{i}")
+            else:
+                st.caption("Nothing here is drawn until you ask for it.")
+    elif kind in ("missing_viewer", "rank_viewer"):
+        render_missing_viewer(block, key)
+    elif kind == "shift_viewer":
+        render_shift_viewer(block, key)
+    elif kind == "chooser":
+        labels = [option["label"] for option in block["options"]]
+        chosen = st.selectbox(block["label"], labels, key=f"pick{key}")
+        option = next(o for o in block["options"] if o["label"] == chosen)
+        for i, child in enumerate(option["blocks"]):
+            render_block(child, f"{key}-{labels.index(chosen)}-{i}")
+    else:
+        # A block kind the builder emits and this renderer forgot is a silent
+        # hole in the report, so say so on the page rather than in a console
+        # nobody reads in a browser.
+        st.warning(f"Unrenderable block kind: {kind}")
+
+
+_HEADING = re.compile(r"^(#{2,4}) (.+)$")
+
+
+def _anchor(title: str, used: set[str]) -> str:
+    anchor = base = "help-" + (re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "section")
+    n = 1
+    while anchor in used:
+        n += 1
+        anchor = f"{base}-{n}"
+    used.add(anchor)
+    return anchor
+
+
+def help_sections(blocks: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split the help blocks at their markdown headings: the intro, and the sections.
+
+    A section is ``{level, title, anchor, parent, blocks}``; ``level`` is 2 for the
+    shallowest heading the help uses and 3 for anything below it.
+    """
+    found = [
+        len(m.group(1))
+        for b in blocks
+        if b["kind"] == "md"
+        for m in map(_HEADING.match, b["text"].splitlines())
+        if m
+    ]
+    top = min(found, default=2)
+    intro: list[dict] = []
+    sections: list[dict] = []
+    parent, used = "", set()
+
+    def add(block: dict) -> None:
+        (sections[-1]["blocks"] if sections else intro).append(block)
+
+    for block in blocks:
+        if block["kind"] != "md":
+            add(block)
+            continue
+        lines: list[str] = []
+        for line in block["text"].splitlines():
+            match = _HEADING.match(line)
+            if not match:
+                lines.append(line)
+                continue
+            if "\n".join(lines).strip():
+                add({"kind": "md", "text": "\n".join(lines).strip()})
+            lines = []
+            level, title = (2 if len(match.group(1)) == top else 3), match.group(2).strip()
+            parent = title if level == 2 else parent
+            sections.append(
+                {
+                    "level": level,
+                    "title": title,
+                    "anchor": _anchor(title, used),
+                    "parent": parent if level == 3 else "",
+                    "blocks": [],
+                }
+            )
+        if "\n".join(lines).strip():
+            add({"kind": "md", "text": "\n".join(lines).strip()})
+    return intro, sections
+
+
+def _words(query: str) -> list[str]:
+    return query.lower().split()
+
+
+def _text_of(block: dict) -> str:
+    if block["kind"] == "md":
+        return block["text"]
+    if block["kind"] == "table":
+        return (
+            " ".join(map(str, block["headers"]))
+            + " "
+            + " ".join(str(c) for row in block["rows"] for c in row)
+        )
+    return ""
+
+
+def highlight(markdown: str, query: str) -> str:
+    """Wrap the query words in <mark>, leaving `code` spans alone."""
+    found = sorted(set(_words(query)), key=len, reverse=True)
+    if not found:
+        return markdown
+    pattern = re.compile("|".join(re.escape(w) for w in found), re.IGNORECASE)
+    parts = markdown.split("`")
+    for i in range(0, len(parts), 2):  # even parts are outside code spans
+        parts[i] = pattern.sub(lambda m: f"<mark>{m.group(0)}</mark>", parts[i])
+    return "`".join(parts)
+
+
+def contents(links: list[tuple[int, str, str]], head: str) -> None:
+    """The sidebar's docs-style table of contents: (level, title, anchor) per entry."""
+    items = (
+        "".join(
+            f"<a class='toc-l{level}' href='#{anchor}'>{html.escape(title)}</a>"
+            for level, title, anchor in links
+        )
+        or "<span class='toc-none'>Nothing matches.</span>"
+    )
+    st.markdown(
+        f"<div class='toc-head'>{head}</div><nav class='toc'>{items}</nav>",
+        unsafe_allow_html=True,
+    )
+
+
+def title_block(title: str) -> None:
+    st.markdown(
+        f'<div class="batch_table-title">{html.escape(title)}</div>', unsafe_allow_html=True
+    )
+
+
+def help_page() -> None:
+    """The report's method on a page of its own, searchable, as the dashboard's help is."""
+    help_ = PAYLOAD["help"]
+    intro, sections = help_sections(help_["blocks"])
+
+    query = st.text_input(
+        "Search the help",
+        placeholder="Type words to find",
+        key="help_search",
+        icon=":material/search:",
+    )
+    words = _words(query)
+    hits = [
+        s
+        for s in sections
+        if all(
+            w in " ".join([s["parent"], s["title"], *map(_text_of, s["blocks"])]).lower()
+            for w in words
+        )
+    ]
+
+    with st.sidebar:
+        st.button(
+            "Back to the report",
+            icon=":material/arrow_back:",
+            on_click=st.session_state.update,
+            kwargs={"page": "report"},
+            width="stretch",
+        )
+        count = f" · {len(hits)} matching" if words else ""
+        contents([(s["level"], s["title"], s["anchor"]) for s in hits], f"Contents{count}")
+
+    if not words:
+        title_block(f"Help · {help_['title']}")
+        for i, block in enumerate(intro):
+            render_block(block, f"help-intro-{i}")
+    elif hits:
+        st.caption(f"{len(hits)} of {len(sections)} sections contain every word of the search.")
+    else:
+        st.info("No section contains all these words. Try fewer or shorter words.")
+
+    for n, s in enumerate(hits):
+        if s["level"] == 2:
+            st.header(s["title"], anchor=s["anchor"])
+        else:
+            if words:
+                st.caption(s["parent"])
+            st.subheader(s["title"], anchor=s["anchor"])
+        for i, block in enumerate(s["blocks"]):
+            if block["kind"] == "md":
+                st.markdown(highlight(block["text"], query), unsafe_allow_html=True)
+            else:
+                render_block(block, f"help-{n}-{i}")
+
+
+#: Places in the sidebar a block may fill, reserved before the page is drawn.
+SLOTS: dict = {}
+
+
+def report_page() -> None:
+    compact = PAYLOAD.get("compact", False)
+    with st.sidebar:
+        SLOTS["site"] = st.container()
+        if compact and PAYLOAD.get("lead"):
+            with st.popover("About this report", icon=":material/info:", width="stretch"):
+                st.markdown(PAYLOAD["lead"])
+                st.caption(PAYLOAD["subtitle"])
+        contents([(2, s["title"], s["id"]) for s in PAYLOAD["sections"]], "Contents")
+        if PAYLOAD.get("help"):
+            st.divider()
+            st.button(
+                f"Help: {PAYLOAD['help']['title']}",
+                icon=":material/help:",
+                key="help",
+                on_click=st.session_state.update,
+                kwargs={"page": "help"},
+                width="stretch",
+            )
+
+    sections = PAYLOAD["sections"]
+    if compact:
+        # A working page: no heading above it, it opens on its first section's content.
+        for i, block in enumerate(sections[0]["blocks"]):
+            render_block(block, f"{sections[0]['id']}-{i}")
+        sections = sections[1:]
+    else:
+        title_block(PAYLOAD["title"])
+        if PAYLOAD.get("lead"):
+            st.markdown(
+                f'<p class="batch_table-lead">{html.escape(PAYLOAD["lead"])}</p>',
+                unsafe_allow_html=True,
+            )
+        st.markdown(
+            f'<p class="batch_table-sub">{html.escape(PAYLOAD["subtitle"])}</p>',
+            unsafe_allow_html=True,
+        )
+
+    # Each section in a bordered box, the dashboard's expander look; expanders
+    # themselves cannot hold the folded blocks a section may contain.
+    for section in sections:
+        with st.container(border=True):
+            st.subheader(section["title"], anchor=section["id"])
+            for i, block in enumerate(section["blocks"]):
+                render_block(block, f"{section['id']}-{i}")
+
+
+st.set_page_config(page_title=PAYLOAD["title"], layout="wide", initial_sidebar_state="expanded")
+st.html(CSS)
+
+with st.sidebar:
+    st.markdown(
+        f'<div class="batch_table-name">{html.escape(PAYLOAD["title"])}</div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(PAYLOAD["subtitle"])
+
+if PAYLOAD.get("help") and st.session_state.get("page") == "help":
+    help_page()
+else:
+    report_page()

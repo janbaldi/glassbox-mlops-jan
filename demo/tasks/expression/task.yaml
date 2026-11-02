@@ -1,0 +1,63 @@
+# A demo task workspace written by `python -m ml.demo`. Its runs go to runs/.
+config: ../../config.yaml
+task:
+  name: expression
+  question: Which manufacturing parameters go with final product expression at Northfield?
+  seed: 20260917
+cohort:
+  sites:
+  - Northfield
+  filters:
+  - column: Batch kind
+    op: equals
+    value: Routine
+    reason: manufactured routinely
+  - column: Testing complete (Y/N)
+    op: equals
+    value: Y
+    reason: manufacturing and testing finished
+  - column: Deviation class
+    op: not_in
+    value:
+    - halt
+    - recall
+    normalise: true
+    missing: include
+    reason: not stopped, however it is spelled
+target:
+  column: Product CAR expression (%)
+  type: numeric
+roles:
+  id: 'Patient Lot/Batch #'
+  group: Vector lot
+predictors:
+  exclude:
+  - column: Patient weight (kg)
+    reason: dose per kilogram already carries it
+  - column: Day 10 cells after wash (cells)
+    reason: counted after the wash
+  exclude_by_catalog:
+    Available At:
+    - Wash
+    - Formulation
+    - Final product
+    - Post-thaw
+    - Release
+    - Post-release
+encoding:
+  onehot_max_categories: 5
+  target_max_categories: 6
+  target_encoding_smoothing: 5.0
+  target_encoding_folds: 5
+  hashing_max_buckets: 16
+quality:
+  min_non_missing: 8
+  duplicate_r2_threshold: 0.99
+  duplicate_min_overlap: 8
+clustering:
+  action: describe
+  method: spearman
+  threshold: 0.7
+  min_overlap: 8
+report:
+  preview_rows: 15

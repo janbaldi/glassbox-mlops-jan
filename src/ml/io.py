@@ -1,0 +1,722 @@
+"""Reading every source the batch table is built from.
+
+The catalog specification, both sites' batch records, the parameter-name mapping
+between them, the re-manufacturing treatment-line supplement, the lentiviral
+vector certificates of analysis, and the raw-material identifiers. Each loader
+takes a :class:`Source`, read from the SharePoint location ``config.yaml`` gives
+it. Nothing here knows an address, and no source's column is named here: each is
+a key the vocabulary resolves (:mod:`ml.names`).
+
+Everything returned here is an *original* parameter. Nothing in this module
+calculates anything from another column.
+"""
+
+from __future__ import annotations
+
+import re
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+import pandas as pd
+
+from . import features, share
+from . import provenance as prov
+from .logger import log
+from .names import col, cols, site, value
+
+MODULE = "io"
+
+#: The value types the catalog may declare, besides a bracketed ordinal category list.
+VALUE_TYPES = frozenset({"numeric", "categorical", "datetime", "duration", "ratio", "boolean"})
+
+#: Rows of workbook furniture above the header, where a source has any.
+DEFAULT_HEADERS = {"lv_coa": 2}
+
+
+def read_table(path: str | Path, sheet: str | int = 0, header: int = 0) -> pd.DataFrame:
+    """A file this package wrote itself — a run's copy of its inputs — read by its extension."""
+    suffix = Path(path).suffix.lower()
+    if suffix in (".csv", ".txt"):
+        return pd.read_csv(path, header=header)
+    if suffix == ".parquet":
+        return pd.read_parquet(path)
+    return pd.read_excel(path, sheet_name=sheet, header=header)
+
+
+@dataclass
+class Source:
+    """One input, and where it is read from.
+
+    ``location`` is where it is on SharePoint; built by :func:`ml.config.source`
+    from config.yaml. Only a task rerun has a ``path`` instead: the copy of its
+    input the original run kept in its own folder.
+    """
+
+    label: str
+    location: share.Location | None = None
+    header: int = 0
+    path: str = ""
+
+    @property
+    def is_remote(self) -> bool:
+        return self.location is not None
+
+    @property
+    def where(self) -> str:
+        return str(self.location) if self.location is not None else self.path
+
+    def read(self) -> pd.DataFrame:
+        if self.location is not None:
+            return share.read_table(self.location, self.header)
+        if not self.path:
+            raise FileNotFoundError(f"No SharePoint location is configured for '{self.label}'")
+        return read_table(self.path, 0, self.header)
+
+    def record(self, frame: pd.DataFrame | None) -> prov.Source:
+        """What provenance says about this input, as it was actually read.
+
+        A SharePoint read has no local bytes, so it is recorded by its location
+        and a digest of the table that came back.
+        """
+        if frame is None:
+            why = "could not be read; the stage went on without it"
+            return prov.missing(self.label, self.where, why)
+        if self.is_remote:
+            return prov.remote(self.label, self.where, frame)
+        return prov.run_copy(self.label, self.path, frame)
+
+
+def as_source(value: str | Path | Source, label: str) -> Source:
+    """A plain path is a run's own copy of an input."""
+    if isinstance(value, Source):
+        return value
+    return Source(label, header=DEFAULT_HEADERS.get(label, 0), path=str(value))
+
+
+def _read(source: Source, what: str) -> pd.DataFrame:
+    if source.location is not None:
+        detail = f"{source.location.name}  ·  {source.location.where}"
+        if source.location.sheet not in (0, "", None) and not source.location.is_csv:
+            detail += f"  ·  sheet {source.location.sheet}"
+    else:
+        detail = source.path
+    log.step(MODULE, f"Loading {what}", detail)
+    return source.read()
+
+
+# ── Public helpers ─────────────────────────────────────────────────────────────
+
+
+def read_catalog(catalog: str | Path | Source) -> pd.DataFrame:
+    """The parameter catalog as it stands: one row per parameter.
+
+    Every stage starts here. ``Parameter`` names what the batch table may hold and
+    ``Value Type`` says what it holds — including, for an ordinal parameter, its
+    categories in order, written as a bracketed list. Any other column is
+    metadata a task can select parameters by (``predictors.exclude_by_catalog``).
+    """
+    source = as_source(catalog, "catalog")
+    frame = _read(source, "Catalog")
+
+    missing = [c for c in ("Parameter", "Value Type") if c not in frame.columns]
+    if missing:
+        raise ValueError(f"The catalog at {source.where} has no {' or '.join(missing)} column")
+
+    blank = frame["Parameter"].isna() | (frame["Parameter"].astype(str).str.strip() == "")
+    if blank.any():
+        log.warn(MODULE, f"{int(blank.sum())} catalog rows have no parameter name and are ignored")
+        frame = frame.loc[~blank]
+    repeated = frame["Parameter"].astype(str).value_counts()
+    repeated = repeated[repeated > 1]
+    if len(repeated):
+        log.warn(
+            MODULE,
+            f"{len(repeated)} catalog parameters are listed more than once; "
+            "the first row of each wins",
+            ", ".join(map(str, repeated.index[:10])),
+        )
+        frame = frame.drop_duplicates(subset="Parameter", keep="first")
+    unknown = sorted(
+        {
+            str(value)
+            for value in frame["Value Type"].dropna().unique()
+            if str(value) not in VALUE_TYPES and not str(value).strip().startswith("[")
+        }
+    )
+    if unknown:
+        log.warn(
+            MODULE,
+            f"{len(unknown)} catalog value types are not ones this pipeline knows",
+            ", ".join(unknown[:10]),
+        )
+
+    counts = frame["Value Type"].value_counts().to_dict()
+    log.success(
+        MODULE,
+        f"Catalog loaded — {len(frame)} parameters",
+        "  |  ".join(f"{k}: {v}" for k, v in counts.items()),
+    )
+    return frame
+
+
+def load_catalog(catalog: str | Path | Source) -> tuple[list[str], dict[str, str]]:
+    """The catalog as the build wants it: the parameter names, and their value types."""
+    frame = read_catalog(catalog)
+    return list(frame["Parameter"].values), dict(zip(frame["Parameter"], frame["Value Type"]))
+
+
+def load_batch_table(batch_table: str | Path | Source) -> pd.DataFrame:
+    """A site's batch table, as ``ml build`` wrote it (Excel or its Parquet copy)."""
+    source = as_source(batch_table, "batch_table")
+    frame = _read(source, "Batch table")
+    if "Site Merged" not in frame.columns:
+        raise ValueError(f"{source.where} has no 'Site Merged' column — is it a batch table?")
+    log.success(
+        MODULE, f"Batch table loaded — {len(frame):,} batches × {frame.shape[1]:,} parameters"
+    )
+    return frame
+
+
+def load_investigations(investigations: str | Path | Source) -> pd.DataFrame | None:
+    """The investigations team's Power Query workbook, if it is reachable.
+
+    Only the catalog stage reads it, and only to see which parameters it uses. It
+    is not part of the build, so a run without it carries on and says the source
+    was not compared.
+    """
+    source = as_source(investigations, "investigations")
+    try:
+        return _read(source, "the investigations Power Query workbook")
+    except Exception as exc:  # unreachable is a finding here, not a failure
+        log.warn(MODULE, f"Investigations workbook not read: {exc}")
+        return None
+
+
+def load_phf(phf: str | Path | Source, which: str) -> pd.DataFrame:
+    """Load site ``which``'s batch records (``a`` or ``b``)."""
+    name = site(which)
+    frame = _read(as_source(phf, f"phf_site_{which}"), f"{name} batch records")
+    log.success(
+        MODULE, f"{name} batch records loaded — {len(frame):,} rows × {frame.shape[1]} columns"
+    )
+    return frame
+
+
+def load_site_mapping(
+    mapping: str | Path | Source, exclude: list[str] | tuple[str, ...] = ()
+) -> dict[str, str]:
+    """
+    Load the parameter-name mapping between the sites.
+
+    Returns a cleaned dict ``{site B column: site A column}``. ``exclude`` names
+    mapping rows known to be wrong (``mapping.exclude`` in the config).
+    """
+    df_mapping = _read(as_source(mapping, "param_mapping"), "site parameter name mapping")
+
+    required = [col("map_site_b_name"), col("map_site_a_name")]
+    absent = [column for column in required if column not in df_mapping.columns]
+    if absent:
+        raise ValueError(f"The parameter mapping has no {' or '.join(absent)} column")
+
+    name_mapping: dict[str, str] = {}
+    conflicts: list[str] = []
+    unusable: list[str] = []
+    for source, target in zip(df_mapping[required[0]], df_mapping[required[1]]):
+        if pd.isna(source) or not str(source).strip():
+            continue
+        source = str(source).strip()
+        if pd.isna(target) or not str(target).strip():
+            unusable.append(source)
+            continue
+        target = str(target).strip()
+        if source in name_mapping and name_mapping[source] != target:
+            conflicts.append(f"{source} → {name_mapping[source]} / {target}")
+            continue
+        name_mapping[source] = target
+
+    excluded = [name for name in exclude if name_mapping.pop(name, None) is not None]
+    if excluded:
+        log.info(MODULE, f"{len(excluded)} mapping rows excluded by config", ", ".join(excluded))
+
+    if conflicts:
+        raise ValueError(
+            f"The parameter mapping sends one {site('b')} column to two different "
+            f"{site('a')} names: " + "; ".join(conflicts[:5])
+        )
+    if unusable:
+        log.warn(
+            MODULE,
+            f"{len(unusable)} mapping rows have no {site('a')} name and were dropped",
+            ", ".join(unusable[:10]),
+        )
+    log.success(MODULE, f"Site mapping loaded — {len(name_mapping)} usable mappings")
+    return name_mapping
+
+
+def apply_column_mapping(df_site_b: pd.DataFrame, name_mapping: dict) -> pd.DataFrame:
+    """Rename site B's columns to site A's names, suffixing only what collides.
+
+    Two source columns can map to one name — the site records a country twice
+    under different headings, say. The first of them, by position, keeps the
+    plain name and each later one takes ``_1``, ``_2``… so which values ended up
+    under which name is determined by the file, not by dictionary order. A
+    suffix that is already a column name is skipped rather than reused.
+    """
+    log.step(MODULE, f"Applying column mapping to {site('b')}")
+
+    proposed = [str(name_mapping.get(column, column)) for column in df_site_b.columns]
+    reserved = set(proposed)
+    taken: set[str] = set()
+    final: list[str] = []
+    renamed: list[tuple[str, str]] = []
+
+    for source, target in zip(df_site_b.columns, proposed):
+        name = target
+        if name in taken:
+            index = 1
+            while f"{target}_{index}" in taken or f"{target}_{index}" in reserved:
+                index += 1
+            name = f"{target}_{index}"
+            renamed.append((str(source), name))
+        taken.add(name)
+        reserved.add(name)
+        final.append(name)
+
+    if len(set(final)) != len(final):
+        raise ValueError("Column mapping produced duplicate names; the mapping file is wrong")
+
+    df_site_b = df_site_b.copy()
+    df_site_b.columns = final
+    for old, new in renamed:
+        log.warn(MODULE, f"Two columns claim one name: '{old}' is kept as '{new}'")
+
+    log.success(
+        MODULE,
+        f"{site('b')} column mapping applied",
+        f"{len(renamed)} columns renamed to avoid duplicates",
+    )
+    return df_site_b
+
+
+def join_key(df: pd.DataFrame, candidates: tuple[str, ...], what: str) -> str:
+    """The column a join is keyed on, by name. Never "the first column"."""
+    for candidate in candidates:
+        if candidate in df.columns:
+            return candidate
+    raise ValueError(
+        f"{what} has no join key: none of {', '.join(candidates)} is a column of it "
+        f"(it has {', '.join(map(str, df.columns[:8]))})"
+    )
+
+
+def normalise_key(series: pd.Series) -> pd.Series:
+    """A join key with its whitespace flattened, as text."""
+    return series.astype("string").str.strip()
+
+
+def attach_supplement(
+    df: pd.DataFrame, supplement: pd.DataFrame, key: str, columns: list[str]
+) -> pd.DataFrame:
+    """Join a per-batch lookup on, and refuse anything that would multiply rows.
+
+    A lookup with the same key twice is either the same record written twice —
+    dropped, with a count — or two different records, which is a data problem
+    this cannot resolve by averaging. Rows with no key are dropped rather than
+    left to match every other empty key.
+    """
+    lookup_key = join_key(supplement, (key,), "The supplement")
+    wanted = [c for c in columns if c in supplement.columns]
+    absent = [c for c in columns if c not in supplement.columns]
+    if absent:
+        log.warn(MODULE, f"The supplement does not carry {', '.join(absent)}")
+    lookup = supplement[[lookup_key, *wanted]].copy()
+    lookup[lookup_key] = normalise_key(lookup[lookup_key])
+
+    empty = int(lookup[lookup_key].isna().sum())
+    if empty:
+        log.warn(MODULE, f"{empty} supplement rows have no {key} and were left out of the join")
+        lookup = lookup.loc[lookup[lookup_key].notna()]
+
+    before = len(lookup)
+    lookup = lookup.drop_duplicates()
+    if len(lookup) != before:
+        log.info(MODULE, f"{before - len(lookup)} duplicate supplement rows removed")
+    conflicting = lookup[lookup.duplicated(subset=lookup_key, keep=False)]
+    if not conflicting.empty:
+        raise ValueError(
+            f"The supplement gives different values for the same {key}: "
+            f"{sorted(set(conflicting[lookup_key].dropna()))[:5]}. "
+            "One batch cannot have two answers"
+        )
+
+    rows = len(df)
+    out = df.copy()
+    out[key] = normalise_key(out[key])
+    out = out.merge(lookup, on=key, how="left", validate="m:1")
+    if len(out) != rows:
+        raise ValueError(f"Joining the supplement changed the row count: {rows} → {len(out)}")
+    log.info(MODULE, f"Supplement joined on {key} — {', '.join(wanted)}")
+    return out
+
+
+def load_remanufacturing_supplement(remfg: str | Path | Source) -> pd.DataFrame:
+    """Load site B's treatment-line supplement (the number of prior lines of therapy)."""
+    df = _read(as_source(remfg, "remfg"), "re-manufacturing treatment-line supplement")
+
+    key = join_key(
+        df,
+        cols("remfg_batch_keys"),
+        "The re-manufacturing supplement",
+    )
+    df = df.rename(columns={key: "Patient Lot/Batch #"})
+    empty = int(df["Patient Lot/Batch #"].isna().sum())
+    if empty:
+        log.warn(MODULE, f"{empty} supplement rows have no batch number and were dropped")
+    df = df.dropna(subset=["Patient Lot/Batch #"])
+    df = df.rename(columns={col("prior_lines_source"): col("prior_lines")})
+    log.success(MODULE, f"Re-MFG supplement loaded — {len(df):,} rows")
+    return df
+
+
+def load_lv_coa(
+    lv_coa: str | Path | Source,
+    catalog_cols: list[str],
+    ph_nominal: float | None = None,
+    osmo_nominal: float | None = None,
+    censored: str = "limit",
+) -> pd.DataFrame:
+    """
+    Load the vector certificates of analysis and engineer lot-level features for
+    the expected patient-batch expression model.
+
+    Parameters
+    ----------
+    censored : str
+        What an impurity below its limit of quantification (``<0.5``) becomes:
+        ``limit`` (0.5), ``half`` (0.25) or ``missing``. The same setting as
+        ``cleaning.censored``, so a censored value means one thing whichever
+        source it came from; the ``below LOQ`` flag records it either way.
+    ph_nominal, osmo_nominal : float | None
+        Release-spec MIDPOINT for the two-sided |deviation| features (Block 2).
+        PRODUCT-SPECIFIC — pass from spec, never a data mean (a data-derived
+        centre leaks). If None, that deviation feature is skipped with a warning.
+    """
+    df = _read(as_source(lv_coa, "lv_coa"), "vector certificates of analysis")
+    log.success(MODULE, f"Vector certificates loaded — {len(df):,} rows × {df.shape[1]} columns")
+
+    # --- drop section-marker columns (headers "1".."5","42","42 ", empty) ---
+    marker = [
+        c
+        for c in df.columns
+        if isinstance(c, (int, float, np.integer)) or (isinstance(c, str) and c.strip().isdigit())
+    ]
+    if marker:
+        df.drop(columns=marker, inplace=True)
+
+    df[col("coa_lot")] = df[col("coa_lot")].astype("string").str.strip()
+    df = df[df[col("coa_available")] == value("coa_available_yes")].copy()
+    df = df.dropna(axis=1, how="all")  # removes unadjusted titer only if all-empty
+
+    def norm(name: object) -> str:
+        """A column name with its spacing and case flattened, for matching."""
+        return re.sub(r"\s+", " ", str(name).strip().lower())
+
+    lookup: dict[str, str] = {}
+    for c in df.columns:
+        lookup.setdefault(norm(c), c)
+
+    def find(*cands: str) -> str | None:
+        """The workbook's own spelling of a vocabulary column, if it has it."""
+        for cand in cands:
+            hit = lookup.get(norm(cand))
+            if hit is not None:
+                return hit
+        return None
+
+    prefix = col("coa_prefix")
+    impurities = cols("coa_impurities")
+
+    engineered: list[str] = []
+    lineage: dict[str, tuple[str, ...]] = {}
+
+    def add(name: str, series: pd.Series, *sources: str | None) -> None:
+        """Create one derived certificate column, and record what it came from.
+
+        The parsing belongs here, next to the workbook's own quirks, but the
+        lineage belongs to the whole pipeline: a later stage has to know that a
+        column is arithmetic over others before it can decide whether the target
+        is inside it. ``features.coa_lineage()`` is the table this is checked
+        against, so the two cannot silently drift apart.
+        """
+        df[name] = series
+        engineered.append(name)
+        lineage[name] = tuple(f"{prefix}{s}" for s in sources if s)
+
+    # ------------------------------------------------------------------ #
+    # Numeric coercion for EUROPEAN-LOCALE TEXT cells:
+    #   decimal comma -> dot ("3,40E+07" -> 3.40e7, "7,5" -> 7.5)
+    #   percent strings -> fractions ("20,0%" -> 0.20, "96%" -> 0.96)
+    # Comma is the DECIMAL separator (no thousands grouping; big values use
+    # scientific notation). Real numeric dtypes are returned unchanged.
+    # ------------------------------------------------------------------ #
+    def eu_num(s: pd.Series) -> pd.Series:
+        if s.dtype.kind in "biufc":
+            return s.astype(float)
+        raw = s.astype("string").str.strip()
+        is_pct = raw.str.contains("%", na=False)
+        cleaned = raw.str.replace("%", "", regex=False).str.replace(",", ".", regex=False)
+        out = pd.to_numeric(cleaned, errors="coerce")
+        return out.where(~is_pct, out / 100.0)
+
+    # ================================================================== #
+    # BLOCK 4a — left-censored impurities ("<LOQ"), detected BEFORE coercion.
+    # Below-LOQ means LOW, not UNKNOWN, so it is (i) flagged and (ii) rewritten
+    # by the run's one censoring policy (cleaning.censored): the limit itself,
+    # half of it, or missing. Concentration columns only (that's where LOQ
+    # censoring lives).
+    # ================================================================== #
+    conc_impurity = [c for c in (find(name) for name in impurities) if c is not None]
+
+    for c in conc_impurity:
+        raw = df[c].astype("string").str.strip()
+        loq = raw.str.extract(r"^<\s*([\d.,]+)", expand=False)  # "<0,5" -> "0,5"
+        below = loq.notna()
+        if below.any():
+            add(f"{c} below LOQ", below.astype("int8"), c)
+            loq_num = pd.to_numeric(loq.str.replace(",", ".", regex=False), errors="coerce")
+            if censored == "half":
+                loq_num = loq_num / 2.0
+            elif censored == "missing":
+                loq_num = loq_num * np.nan
+            df[c] = raw.where(~below, loq_num.astype("string"))
+
+    # Delivered-mass impurity columns — kept as features (see header note).
+    calc_impurity = [
+        c for c in (find(col("coa_calc_prefix") + name) for name in impurities) if c is not None
+    ]
+
+    titer_adj = find(col("coa_titer"))
+    titer_unadj = find(col("coa_titer_unadjusted"))  # may survive but be PARTIAL
+    p24 = find(col("coa_p24"))
+    vol = find(col("coa_volume"))
+    car, ifng = col("coa_car_metric"), col("coa_ifng_metric")
+
+    numeric_cols = [
+        c
+        for c in (
+            titer_adj,
+            titer_unadj,
+            p24,
+            find(col("coa_pi_ratio")),
+            find(col("coa_donor", metric=car, donor=1)),
+            find(col("coa_donor", metric=car, donor=2)),
+            find(col("coa_donor_average", metric=car)),
+            find(col("coa_donor", metric=ifng, donor=1)),
+            find(col("coa_donor", metric=ifng, donor=2)),
+            find(col("coa_donor_average", metric=ifng)),
+            find(col("coa_ph")),
+            find(col("coa_osmolality")),
+            vol,
+            find(col("coa_dna_size")),
+            *conc_impurity,
+            *calc_impurity,
+        )
+        if c is not None
+    ]
+    for c in numeric_cols:
+        df[c] = eu_num(df[c])
+
+    # ================================================================== #
+    # BLOCK 1 — constructed ratios / products.
+    # XGBoost splits are axis-aligned, so a quotient/product must otherwise be
+    # approximated by a deep staircase of splits — wasteful at n~tens of lots.
+    # Precomputing hands the model the mechanism directly.
+    # ================================================================== #
+
+    # Delivered functional dose per G-Rex = titer x volume added.
+    #   Proportional to effective MOI when cell seed is fixed; expected strongest
+    #   chemistry feature. Titer basis chosen PER ROW: prefer UNADJUSTED (the
+    #   physical amount actually delivered, and it dodges the adjusted-titer
+    #   back-channel), fall back to ADJUSTED only where unadjusted is missing.
+    #   If the titer adjustment is derived from a potency standard, the fallback
+    #   rows partially back-channel the target — so we flag exactly those rows.
+    if vol and (titer_unadj or titer_adj):
+        if titer_unadj and titer_adj:
+            dose_titer = df[titer_unadj].where(df[titer_unadj].notna(), df[titer_adj])
+            n_fb = int(df[titer_unadj].isna().to_numpy().sum())
+            add(col("coa_delivered_dose"), dose_titer * df[vol], titer_unadj, titer_adj, vol)
+            if n_fb:
+                add(
+                    col("coa_delivered_dose_fallback"),
+                    df[titer_unadj].isna().astype("int8"),
+                    titer_unadj,
+                )
+                log.warn(
+                    MODULE,
+                    f"Delivered-dose: {n_fb}/{len(df)} lots fell back "
+                    f"to ADJUSTED titer — potency back-channel possible "
+                    f"on those rows",
+                )
+        else:
+            basis = titer_unadj or titer_adj
+            if basis == titer_adj:
+                log.warn(
+                    MODULE,
+                    "Delivered-dose uses ADJUSTED titer (no unadjusted "
+                    "column) — check for potency back-channel",
+                )
+            add(col("coa_delivered_dose"), df[basis] * df[vol], basis, vol)
+
+    # Titer adjustment factor = adjusted / unadjusted.
+    #   How hard release titer was corrected; large corrections can flag assay
+    #   drift. Defined only where BOTH exist; NaN elsewhere.
+    if titer_adj and titer_unadj:
+        add(
+            col("coa_titer_adjustment"),
+            df[titer_adj] / df[titer_unadj].replace(0, np.nan),
+            titer_adj,
+            titer_unadj,
+        )
+
+    # Specific infectivity = infectious titer / physical p24 titer.
+    #   Functional particles per physical particle; empty/defective particles
+    #   don't transduce, so this adds signal beyond raw titer. Built explicitly
+    #   rather than reused from the particle ratio column (different units and
+    #   polarity: that ratio is ~1e4 while titer/p24 is ~1 — NOT the same quantity).
+    if titer_adj and p24:
+        add(
+            col("coa_specific_infectivity"),
+            df[titer_adj] / df[p24].replace(0, np.nan),
+            titer_adj,
+            p24,
+        )
+
+    # The last residual-DNA impurity as a fraction of total residual DNA
+    #   (concentration basis). *** LEAKAGE CAUTION: it is a known lot-FINGERPRINT
+    #   risk — it can
+    #   encode vector-lot identity rather than genuine quality. Validate under
+    #   vector-lot GroupKFold; drop if it only helps within-lot.
+    dna_cols = [c for c in (find(name) for name in impurities[1:]) if c is not None]
+    e1b = find(impurities[-1])
+    if e1b and len(dna_cols) >= 2:
+        total_dna = df[dna_cols].sum(axis=1, min_count=1)
+        add(col("coa_last_dna_fraction"), df[e1b] / total_dna.replace(0, np.nan), *dna_cols)
+
+    # ================================================================== #
+    # BLOCK 2 — two-sided spec deviations as monotone features.
+    # pH / osmolality hurt on BOTH sides of spec (U-shaped). |x - nominal|
+    # folds that into ONE monotone feature -> a single split instead of extra
+    # depth to rediscover both tails. nominal = fixed spec midpoint, not a mean.
+    # ================================================================== #
+    for name, target, nominal, setting in [
+        (col("coa_ph"), find(col("coa_ph")), ph_nominal, "lv_coa.ph_nominal"),
+        (col("coa_osmolality"), find(col("coa_osmolality")), osmo_nominal, "lv_coa.osmo_nominal"),
+    ]:
+        if target is None:
+            continue
+        if nominal is None:
+            log.warn(MODULE, f"{name} deviation skipped — set {setting}")
+            continue
+        add(f"{name} Abs Deviation", (df[target] - nominal).abs(), target)
+
+    # ================================================================== #
+    # BLOCK 3 — reference-donor summaries (features, not target).
+    # ================================================================== #
+    for metric in (car, ifng):
+        d1 = find(col("coa_donor", metric=metric, donor=1))
+        d2 = find(col("coa_donor", metric=metric, donor=2))
+        if not (d1 and d2):
+            continue
+        pair = df[[d1, d2]]
+
+        # MAX / MIN: best- and worst-donor readings. MIN matters because patient
+        # apheresis material (pretreated, lymphopenic) often transduces WORSE
+        # than healthy reference donors, so the weaker donor may track the
+        # patient-population mean better than the average. Let the model choose.
+        add(f"{metric} Donor MAX", pair.max(axis=1), d1, d2)
+        add(f"{metric} Donor MIN", pair.min(axis=1), d1, d2)
+
+        # DIFF (+ relative): divergent reference donors => a more
+        # donor-context-sensitive lot, plausibly predicting a larger / more
+        # variable gap between reference qualification and the patient mean.
+        diff = pair.max(axis=1) - pair.min(axis=1)
+        add(f"{metric} Donor DIFF", diff, d1, d2)
+        add(f"{metric} Donor DIFF Rel", diff / pair.mean(axis=1).replace(0, np.nan), d1, d2)
+
+        # Reference average (primary potency level). Prefer the certificate's own
+        # average if present (it reconciles with the donor mean); else compute.
+        if find(col("coa_donor_average", metric=metric)) is None:
+            add(f"{metric} Donor AVG", pair.mean(axis=1), d1, d2)
+
+    # ------------------------------------------------------------------ #
+    # Drop identifiers / consumed raw columns, then namespace.
+    # ------------------------------------------------------------------ #
+    # The manufacture date stays: the vector's age at use is computed from it.
+    for c in [col("coa_available"), col("coa_lot_number"), titer_unadj]:
+        if c and c in df.columns:
+            df.drop(columns=c, inplace=True)
+
+    df.columns = [col("vector_lot")] + [prefix + str(c) for c in df.columns[1:]]
+    engineered_prefixed = {prefix + n for n in engineered}
+
+    missing_from_catalog = [
+        c for c in df.columns if c not in catalog_cols and c not in engineered_prefixed
+    ]
+    if missing_from_catalog:
+        log.warn(
+            MODULE,
+            f"{len(missing_from_catalog)} CoA columns not found in catalog",
+            ", ".join(missing_from_catalog),
+        )
+
+    # Derived columns are not catalog parameters, and that is a decision, not an
+    # oversight — but each of them has to be visibly derived, with its inputs.
+    declared = features.coa_lineage()
+    undeclared = sorted(name for name in engineered_prefixed if name not in declared)
+    if undeclared:
+        log.warn(
+            MODULE,
+            f"{len(undeclared)} derived CoA columns have no entry in features.coa_lineage(); "
+            "a task cannot check them for descent from its target",
+            ", ".join(undeclared[:10]),
+        )
+    log.info(
+        MODULE,
+        f"Derived {len(engineered_prefixed)} certificate columns from other certificate columns "
+        "(not catalog parameters; their lineage is in features.coa_lineage())",
+        "; ".join(
+            f"{prefix}{name} ← {', '.join(sources) or 'unrecorded'}"
+            for name, sources in list(lineage.items())[:10]
+        ),
+    )
+
+    log.success(MODULE, f"Vector certificates ready — {len(df):,} lots × {df.shape[1]} columns")
+    return df
+
+
+def load_raw_materials(raw_materials: str | Path | Source, catalog_cols: list[str]) -> pd.DataFrame:
+    """Load the raw materials / consumables identifiers (a CSV export or a workbook)."""
+    df = _read(as_source(raw_materials, "raw_materials"), "raw materials & consumables")
+
+    df.columns = [
+        str(c).replace("Query[", "").replace("]", "") if "Query[" in str(c) else str(c)
+        for c in df.columns
+    ]
+
+    df = df.rename(columns={col("raw_materials_batch"): "Patient Lot/Batch #"})
+
+    key = join_key(df, cols("raw_materials_batch_keys"), "The raw materials export")
+    df = df.rename(columns={key: "Patient Lot/Batch #"})
+    df["Patient Lot/Batch #"] = normalise_key(df["Patient Lot/Batch #"])
+
+    missing_from_catalog = [c for c in df.columns if c not in catalog_cols]
+    if missing_from_catalog:
+        log.warn(
+            MODULE,
+            f"{len(missing_from_catalog)} raw-material columns not in catalog",
+            ", ".join(missing_from_catalog[:10]),
+        )
+
+    log.success(MODULE, f"Raw materials loaded — {df.shape[1] - 1} identifier columns")
+    return df

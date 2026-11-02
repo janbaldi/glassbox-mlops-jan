@@ -1,0 +1,230 @@
+"""One run of every stage, over made-up sources, shared by every test.
+
+The real inputs are on a corporate share, so this is the only place the pipeline
+runs end to end. The demo's folder stands in for SharePoint
+(``$ML_SHAREPOINT_STANDIN``); every read and write goes through it. It runs once
+per session: the stages are written to be run in this order, and running them
+separately would not test that.
+
+Everything is about one site at a time: each site is built from its own config
+(``config.yaml`` about site A, ``config_site_b.yaml`` about site B), and each of the
+two task files is about one of them, because the claim worth testing is that a
+different question needs a different YAML and nothing else.
+
+Most questions are asked of the packages and the reports rather than of the
+frames, because those are what anyone actually reads. The report's numbers come
+out of the payload the run wrote, not out of the markup — the markup is
+Streamlit's business and changes with its version.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import dummy_data  # noqa: E402
+from ml import cli, names, share, stlite, taskconfig  # noqa: E402
+from ml import config as workspace  # noqa: E402
+
+# The tests run on the demo's invented vocabulary, from the first import on:
+# parametrised cases name their columns through it too.
+names.use(names.demo())
+
+#: The two example tasks, by the name each of them carries.
+PREDICTIVE = "expression"
+EXPLORATORY = "release"
+
+
+@pytest.fixture(scope="session")
+def built(tmp_path_factory) -> dict:
+    """Everything the stages produced, for the tests to pick over."""
+    directory = tmp_path_factory.mktemp("demo")
+    config_path = dummy_data.write_config(directory)
+    os.environ[share.STANDIN_ENV] = str(dummy_data.standin(directory))
+    config = cli.load_config(config_path)
+    config_b = cli.load_config(directory / dummy_data.CONFIG_SITE_B)
+
+    reports = {
+        "catalog": on_share(directory, cli.run_catalog(config)),
+        "build": on_share(directory, cli.run_build(config)),
+    }
+    reports_b = {
+        "catalog": on_share(directory, cli.run_catalog(config_b)),
+        "build": on_share(directory, cli.run_build(config_b)),
+    }
+    packages = {}
+    for name in dummy_data.TASK_FILES:
+        spec = taskconfig.load(directory / name)
+        about = config if spec.site == "a" else config_b
+        packages[spec.name] = cli.run_task(about, spec)
+
+    catalog_folder = workspace.catalog_folder(config)
+    return {
+        "directory": directory,
+        "config": config,
+        "config_path": Path(config["__path__"]),
+        "batch_table": pd.read_excel(shared(directory, config, "batch_table")),
+        # The same, about site B.
+        "config_b": config_b,
+        "config_b_path": Path(config_b["__path__"]),
+        "batch_table_b": pd.read_excel(shared(directory, config_b, "batch_table")),
+        "reports_b": reports_b,
+        "new_parameters_b": pd.read_csv(
+            on_share(directory, workspace.catalog_folder(config_b).file("new_parameters.csv"))
+        ),
+        "payloads_b": {
+            stage: stlite.read_payload(path.read_text(encoding="utf-8"))
+            for stage, path in reports_b.items()
+        },
+        "new_parameters": pd.read_csv(
+            on_share(directory, catalog_folder.file("new_parameters.csv"))
+        ),
+        "reports": reports,
+        "packages": packages,
+        "payloads": {
+            stage: stlite.read_payload(path.read_text(encoding="utf-8"))
+            for stage, path in reports.items()
+        },
+    }
+
+
+def on_share(directory: Path, location: share.Location) -> Path:
+    """Where a SharePoint location is in the demo's stand-in folder."""
+    return (
+        dummy_data.standin(directory)
+        / location.drive_id
+        / share.readable(location.path).lstrip("/")
+    )
+
+
+def shared(directory: Path, config: dict, label: str, name: str | None = None) -> Path:
+    """A configured file on the stand-in share — or ``name``, a file in its folder."""
+    location = workspace.location(config, label)
+    return on_share(directory, location.file(name) if name else location)
+
+
+# ---------------------------------------------------------------------------
+# Reading a package back
+# ---------------------------------------------------------------------------
+def artifact(built: dict, task: str, name: str) -> Path:
+    """A file in a task folder, by its bare name; the layout puts it in its subfolder."""
+    return built["packages"][task] / cli.TASK_LAYOUT.get(name, name)
+
+
+def csv(built: dict, task: str, name: str) -> pd.DataFrame:
+    return pd.read_csv(artifact(built, task, name))
+
+
+def manifest(built: dict, task: str) -> dict:
+    return json.loads(artifact(built, task, "manifest.json").read_text(encoding="utf-8"))
+
+
+def payload(built: dict, task: str) -> dict:
+    """The report's payload — the same object the page renders from."""
+    return json.loads(artifact(built, task, "report_payload.json").read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
+# Reading a report back
+# ---------------------------------------------------------------------------
+def tables(payload: dict):
+    """Every table in a report, whatever it is nested behind."""
+
+    def walk(blocks):
+        for block in blocks:
+            if block["kind"] == "table":
+                yield block
+            elif block["kind"] in ("collapsed", "deferred"):
+                yield from walk(block["blocks"])
+            elif block["kind"] == "chooser":
+                for option in block["options"]:
+                    yield from walk(option["blocks"])
+
+    for section_ in payload["sections"]:
+        yield from walk(section_["blocks"])
+
+
+def figures(payload: dict) -> list[dict]:
+    """Every figure in a report, however deeply nested."""
+
+    def walk(blocks):
+        for block in blocks:
+            if block["kind"] == "figure":
+                yield block
+            elif block["kind"] in ("collapsed", "deferred"):
+                yield from walk(block["blocks"])
+            elif block["kind"] == "chooser":
+                for option in block["options"]:
+                    yield from walk(option["blocks"])
+
+    return [figure for section_ in payload["sections"] for figure in walk(section_["blocks"])]
+
+
+def downloads(payload: dict) -> dict[str, dict]:
+    """Every download button in a report, by the file name it offers."""
+
+    found: dict[str, dict] = {}
+
+    def walk(blocks):
+        for block in blocks:
+            if block["kind"] == "download":
+                found[block["filename"]] = block
+            elif block["kind"] in ("collapsed", "deferred"):
+                walk(block["blocks"])
+            elif block["kind"] == "chooser":
+                for option in block["options"]:
+                    walk(option["blocks"])
+
+    for section_ in payload["sections"]:
+        walk(section_["blocks"])
+    return found
+
+
+def rows_naming(payload: dict, value: str) -> list[list]:
+    """Every report row that mentions this value in one of its cells."""
+    return [
+        row
+        for block in tables(payload)
+        for row in block["rows"]
+        if any(value in str(cell) for cell in row)
+    ]
+
+
+def section(payload: dict, section_id: str) -> dict:
+    return next(s for s in payload["sections"] if s["id"] == section_id)
+
+
+def first_table(payload: dict, section_id: str) -> dict:
+    return next(b for b in section(payload, section_id)["blocks"] if b["kind"] == "table")
+
+
+def table_with(payload: dict, header: str) -> dict:
+    """The first table that has this column."""
+    return next(block for block in tables(payload) if header in block["headers"])
+
+
+def facts(block: dict) -> dict[str, str]:
+    """A two-column key/value table as a dict, with the bold markers taken off."""
+    return {row[0].strip("*"): row[1] for row in block["rows"]}
+
+
+def row_named(block: dict, first_cell: str) -> list:
+    """The row of a table whose first cell is this."""
+    return next(row for row in block["rows"] if row[0] == first_cell)
+
+
+def site_a(batch_table: pd.DataFrame) -> pd.DataFrame:
+    return batch_table[batch_table["Site Merged"] == names.site("a")]
+
+
+def site_b(batch_table: pd.DataFrame) -> pd.DataFrame:
+    return batch_table[batch_table["Site Merged"] == names.site("b")]

@@ -1,0 +1,116 @@
+# ml config: where on SharePoint the sources, the parameter catalog and the batch
+# table are, and the settings.
+#
+# Code, configuration and data are kept apart, and the data lives on SharePoint:
+# every input is read from the location given below, and every output is written
+# there. There is no local data option.
+#
+#   ml validate             validate this config without running anything
+#   ml check-catalog        what the sources record that the catalog does not list;
+#                           writes catalog_report.html, catalog_manifest.json and
+#                           new_parameters.csv into Data/catalog/<site>/
+#   ml build                the site's batch table: every batch, cleaned and derived;
+#                           writes batch_data.xlsx, batch_data.parquet, the reports and
+#                           batch_table_manifest.json into Data/batch_data/<site>/
+#   ml task new <folder>    a task workspace with an annotated task.yaml
+#   ml task run             run the task in this folder; runs go into <folder>/runs/
+#   ml check-leaks          search this repository for any name the private
+#                           vocabulary holds; run it before pushing
+#
+# Secrets and SharePoint addresses go in a .env next to this file; see
+# .env.example. No column, category value, site or worksheet is named here or in
+# the code: they are keys, and the private vocabulary workbook names them.
+
+seed: 20260917
+
+# The site everything is about: a or b (the vocabulary names them). `ml build` and
+# `ml check-catalog` read only this site's sources and write into a folder named
+# after it, next to sharepoint.batch_table and sharepoint.catalog; every task
+# reads that site's batch table and screening decisions. Switch it to work on the
+# other site: each site's outputs stay in their own folder.
+site: a
+
+sources:
+  databricks: false        # join the Acridine Orange readings from Databricks
+
+# Where everything lives on SharePoint. The addresses themselves are in .env
+# (git-ignored; see .env.example): ${NAME} is filled in from there.
+#
+# The vocabulary workbook is private too: its Names sheet says what every column,
+# category value, site and worksheet is called (the code refers to them by keys
+# only), and its Corrections sheet holds the known data corrections.
+#
+# catalog and batch_table are also where the stages write: each stage's outputs
+# go into the folder of its file. A `sheet:` here overrides the vocabulary's.
+# A path ending in .csv is read as a CSV file (raw_materials, the consumables
+# export, is one): its delimiter is detected, or given as `sep: ";"`.
+sharepoint:
+  vocabulary:     {path: "${SHAREPOINT_VOCABULARY}", drive_id: "${SHAREPOINT_DRIVE_A}"}
+  catalog:        {path: "${SHAREPOINT_CATALOG}", drive_id: "${SHAREPOINT_DRIVE_A}"}
+  batch_table:    {path: "${SHAREPOINT_BATCH_TABLE}", drive_id: "${SHAREPOINT_DRIVE_A}"}
+  phf_site_a:     {path: "${SHAREPOINT_PHF_SITE_A}", drive_id: "${SHAREPOINT_DRIVE_A}"}
+  phf_site_b:     {path: "${SHAREPOINT_PHF_SITE_B}", drive_id: "${SHAREPOINT_DRIVE_B}"}
+  param_mapping:  {path: "${SHAREPOINT_PARAM_MAPPING}", drive_id: "${SHAREPOINT_DRIVE_A}"}
+  remfg:          {path: "${SHAREPOINT_REMFG}", drive_id: "${SHAREPOINT_DRIVE_B}"}
+  lv_coa:         {path: "${SHAREPOINT_LV_COA}", drive_id: "${SHAREPOINT_DRIVE_A}"}
+  raw_materials:  {path: "${SHAREPOINT_RAW_MATERIALS}", drive_id: "${SHAREPOINT_DRIVE_A}"}
+  investigations: {path: "${SHAREPOINT_INVESTIGATIONS}", drive_id: "${SHAREPOINT_DRIVE_A}"}
+  screening:      {path: "${SHAREPOINT_SCREENING}", drive_id: "${SHAREPOINT_DRIVE_A}"}
+  site_maps:
+    folder: "${SHAREPOINT_SITE_MAPS_FOLDER}"
+    files: "${SHAREPOINT_SITE_MAPS_FILES}"     # comma-separated workbook names
+    drive_id: "${SHAREPOINT_DRIVE_A}"
+
+catalog:
+  write_new_parameters: true
+
+build:
+  write_parquet: true      # a batch_data.parquet beside batch_data.xlsx, which keeps column types
+  date_column: "date_start"   # vocabulary key of the date that orders the batches for the
+                                 # report's missingness patterns (introduced late, retired, …)
+  correlation_threshold: 0.9       # |ρ| every pair in a correlation group reaches (default 0.9)
+  missingness_cohort:              # the batches the missingness report describes
+    column: batch_type             # vocabulary key of the column to select by
+    value: type_commercial         # vocabulary key of the value to keep
+    all_batches_at: [b]            # sites where every batch qualifies
+    analyse_only:                  # statistics and groups over these batches only;
+      column: manufacturing_completed  # the others are drawn in the plot, in green
+      value: completed_yes
+
+cleaning:
+  disable: []                     # names of corrections to switch off
+  censored: limit                 # what '<0.5' becomes: limit | half | missing
+  censored_flags: false           # also add a '<column> censored' 0/1 column
+  duration_unit: minutes          # what a bare number in a duration cell means
+  yes_no_defaults:                # blanks filled only for these columns (vocabulary keys)
+    pre_activation_clumps_yn: 'No'
+
+mapping:
+  exclude:                        # site mapping rows known to be wrong (vocabulary keys)
+    - excluded_mapping_row
+
+features:
+  co2_target: 5.0
+  temp_target: 37.0
+  contact_target: 120.0
+  contact_tolerance: 30.0
+  seeding_tolerance: 5.0
+  cpdl_low: 4.0
+  cpdl_high: 5.0
+  lactate_low: 12.5
+  lactate_high: 30.0
+  cd4_low: 40.0
+  cd4_high: 60.0
+  seeding_target_per_vessel: 50000000   # viable cells one G-Rex is seeded with
+  shift_cutoff: "11:59"                 # thawed before this time of day: morning shift
+  # Process facts some features need. Left unset, those features are reported as
+  # blocked (with the setting they wait for) rather than computed from a guess.
+  moi_target: null                      # the MOI the process aims for
+  medium_glucose: null                  # fresh medium glucose (g/L)
+  medium_lactate: null                  # fresh medium lactate (g/L)
+  impurity_spec_limits: null            # release limits of the vector impurities, in the
+                                        # vocabulary's coa_impurities order (5 numbers)
+
+lv_coa:
+  ph_nominal: 7.2       # release-spec midpoints, never a data mean
+  osmo_nominal: 300.0

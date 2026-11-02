@@ -1,0 +1,204 @@
+"""Using what a task fitted: on new batches, and inside cross-validation.
+
+A task run writes its fitted preprocessing to ``metadata/encoding.json``. Two
+things can be done with it here:
+
+* :func:`apply` encodes new batches — a batch table built later, say — exactly as the
+  training rows were encoded, with nothing refitted. ``ml task encode`` is this.
+* :class:`TaskTransformer` is the same preprocessing as a scikit-learn step. A
+  table preprocessed over every row is not a table to cross-validate on; put the
+  transformer *inside* the pipeline instead, and every fold refits it on its own
+  training rows::
+
+      from sklearn.model_selection import GroupKFold, cross_val_score
+      from sklearn.pipeline import make_pipeline
+      from ml.recipe import TaskTransformer, task_data
+
+      X, y, groups, spec = task_data("tasks/expression")
+      model = make_pipeline(TaskTransformer(spec), SimpleImputer(), StandardScaler(), Ridge())
+      cross_val_score(model, X, y, groups=groups, cv=GroupKFold(5))
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import replace
+from pathlib import Path
+from typing import Any
+
+import numpy as np
+import pandas as pd
+from sklearn.base import BaseEstimator, TransformerMixin
+
+from . import config as workspace
+from . import dataset, io, names, screening, taskconfig
+from .dataset import Preprocessor, TaskResult, fit_preprocessing
+from .logger import log
+
+MODULE = "recipe"
+
+
+def find(run: str | Path) -> Path:
+    """The recipe of a task run, given the run folder or the recipe itself."""
+    path = Path(run)
+    if path.is_dir():
+        path = path / "metadata" / "encoding.json"
+    if not path.is_file():
+        raise FileNotFoundError(f"No recipe at {path} — is this a task run folder?")
+    return path
+
+
+def apply(run: str | Path, rows: pd.DataFrame) -> pd.DataFrame:
+    """Encode ``rows`` with a run's fitted recipe, and say what was missing."""
+    pre = Preprocessor.from_state(json.loads(find(run).read_text(encoding="utf-8")))
+    absent = [column for column in pre.inputs if column not in rows.columns]
+    if absent:
+        log.warn(
+            MODULE,
+            f"{len(absent)} parameters the recipe uses are not in these rows; "
+            "their columns come out empty",
+            ", ".join(absent[:10]),
+        )
+    return pre.transform(rows)
+
+
+class TaskTransformer(TransformerMixin, BaseEstimator):
+    """A task's preprocessing as a scikit-learn transformer.
+
+    ``fit`` learns category vocabularies, target means, near-duplicates,
+    clusters and the sparsity and near-constant checks from the rows it is given;
+    ``transform`` applies them. ``fit_transform`` cross-fits the target encoding
+    on the training rows, as a task run does. ``X`` is the cohort (every batch table
+    column, one row per batch); the grouping column, when present, keeps the
+    target encoding's folds whole.
+
+    ``run`` is a finished run of the task: its groups of correlated parameters
+    (``metadata/groups.json``) are used in every fold instead of being found
+    again, so every fold explains the same groups.
+    """
+
+    def __init__(
+        self,
+        spec: taskconfig.TaskSpec | None = None,
+        catalog: pd.DataFrame | None = None,
+        predictors: tuple[str, ...] = (),
+        run: str | Path | None = None,
+    ):
+        self.spec = spec
+        self.catalog = catalog
+        self.predictors = predictors
+        self.run = run
+
+    def _fit(self, X: pd.DataFrame, y) -> pd.Series:
+        y = pd.Series(np.asarray(y, dtype="float64"), index=X.index)
+        catalog = self.catalog if self.catalog is not None else task_catalog(self.spec)
+        result = TaskResult(spec=self.spec)
+        result.target_column = "__target__"
+        predictors = list(self.predictors) or dataset.candidate_predictors(
+            X, catalog, self.spec, result, task_screening(self.spec)
+        )
+        reserved = {
+            name
+            for name in (self.spec.roles.id, self.spec.roles.group, self.spec.roles.patient)
+            if name
+        } | {"__target__"}
+        fixed = None
+        if self.run is not None:
+            groups = json.loads((Path(self.run) / "metadata" / "groups.json").read_text())
+            fixed = [g["parameters"] for g in groups.values() if len(g["parameters"]) > 1]
+        self.preprocessor_ = fit_preprocessing(
+            X, y, predictors, catalog, self.spec, result, reserved, fixed_groups=fixed
+        )
+        self.feature_names_out_ = np.asarray(self.preprocessor_.output_columns, dtype=object)
+        return y
+
+    def fit(self, X: pd.DataFrame, y=None):
+        self._fit(X, y)
+        return self
+
+    def fit_transform(self, X: pd.DataFrame, y=None, **fit_params: Any) -> pd.DataFrame:
+        y = self._fit(X, y)
+        groups = dataset.split_groups(X, X.index, self.spec)
+        frame, _ = self.preprocessor_.crossfit_transform(X, y, groups=groups)
+        return frame.astype("float64")
+
+    def transform(self, X: pd.DataFrame) -> pd.DataFrame:
+        return self.preprocessor_.transform(X).astype("float64")
+
+    def get_feature_names_out(self, input_features=None):
+        return self.feature_names_out_
+
+
+_catalogs: dict[str, pd.DataFrame] = {}
+
+
+def _task_config(task: str | Path) -> dict:
+    """The config.yaml a task names, or else the nearest one."""
+    return workspace.load(workspace.find(taskconfig.config_file(task), start=task))
+
+
+def task_catalog(spec: taskconfig.TaskSpec, config: dict | None = None) -> pd.DataFrame:
+    """The catalog a task reads, from SharePoint — read once, not once per fold."""
+    key = str(spec.catalog or spec.source)
+    if key not in _catalogs:
+        if spec.catalog is None:
+            config = config or _task_config(spec.source)
+        workspace.task_vocabulary(config, spec.catalog)
+        _catalogs[key] = io.read_catalog(workspace.table_source(config, "catalog", spec.catalog))
+    return _catalogs[key]
+
+
+_screenings: dict[str, dict[str, str]] = {}
+
+
+def task_screening(spec: taskconfig.TaskSpec, config: dict | None = None) -> dict[str, str]:
+    """Parameter → the screening decision a task leaves it out by, as ``ml task run`` does."""
+    key = str(spec.screening or spec.source)
+    if key not in _screenings:
+        if spec.batch_table is not None:  # a run's own folder: its own copy, or none
+            register = (
+                screening.read_copy(spec.screening, names.sites()) if spec.screening else None
+            )
+        else:
+            config = config or _task_config(spec.source)
+            register = (
+                screening.read(workspace.location(config, "screening"), names.sites())
+                if workspace.has(config, "screening")
+                else None
+            )
+        configured = workspace.site_key(config) if spec.batch_table is None else None
+        about = dataset.task_site(spec, configured)
+        decisions = register.decisions if register else []
+        if about:
+            site = names.site(about)
+            out = screening.excluded(screening.for_site(decisions, site), (site,))
+        else:  # a run from before tasks were about one site, as it applied the register
+            out = screening.excluded(decisions, names.sites(), spec.cohort.sites)
+        _screenings[key] = {parameter: screening.labels(found) for parameter, found in out.items()}
+    return _screenings[key]
+
+
+def task_data(
+    task: str | Path, config: dict | None = None
+) -> tuple[pd.DataFrame, pd.Series, pd.Series | None, taskconfig.TaskSpec]:
+    """A task's cohort, target and groups, ready for :class:`TaskTransformer`.
+
+    The cohort filters and the target are applied exactly as ``ml task run`` does;
+    nothing is encoded.
+    """
+    spec = taskconfig.load(task)
+    if config is None and spec.batch_table is None:
+        config = _task_config(task)
+    workspace.task_vocabulary(config, spec.batch_table)
+    configured = workspace.site_key(config) if config and spec.batch_table is None else None
+    spec = replace(spec, site=dataset.task_site(spec, configured))
+    batch_table = io.load_batch_table(
+        workspace.table_source(config, "batch_table", spec.batch_table)
+    )
+    dataset.check_batch_table_site(batch_table, names.site(spec.site) if spec.site else "")
+    result = TaskResult(spec=spec)
+    cohort = dataset.select_cohort(batch_table, spec, result)
+    target, labelled = dataset.prepare_target(cohort, spec, result)
+    cohort = cohort.loc[labelled]
+    groups = dataset.split_groups(cohort, labelled, spec)
+    return cohort, target.loc[labelled].astype("float64"), groups, spec

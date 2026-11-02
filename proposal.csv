@@ -1,0 +1,57 @@
+Action,Parameter,Group,Site,Reason,Rationale,Review by,Author
+exclude,Day 0 Incubator In Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 0 Incubator In CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 1 Incubator Out Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 1 Incubator Out CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 1 Incubator In Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 1 Incubator In CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Incubator Out Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Incubator Out CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Transduction Incubator In Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Transduction Incubator In CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Transduction Incubator Out Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Transduction Incubator Out CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Incubator In Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Incubator In CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 6 Incubator Out Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 6 Incubator Out CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 6 Incubator In Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 6 Incubator In CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 8 Incubator Out Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 8 Incubator Out CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 8 Incubator In Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 8 Incubator In CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Incubator Out Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Incubator Out CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Flow Cytometry Incubator In Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Flow Cytometry Incubator In CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Flow Cytometry Incubator Out Temperature (°C),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Flow Cytometry Incubator Out CO2 Saturation (%),Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 0 Incubator In Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 0 Incubator In CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 1 Incubator Out Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 1 Incubator Out CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 1 Incubator In Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 1 Incubator In CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Incubator Out Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Incubator Out CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Transduction Incubator In Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Transduction Incubator In CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Transduction Incubator Out Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Transduction Incubator Out CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Incubator In Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 3 Incubator In CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 6 Incubator Out Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 6 Incubator Out CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 6 Incubator In Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 6 Incubator In CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 8 Incubator Out Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 8 Incubator Out CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 8 Incubator In Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 8 Incubator In CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Incubator Out Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Incubator Out CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Flow Cytometry Incubator In Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Flow Cytometry Incubator In CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Flow Cytometry Incubator Out Temperature (°C) dev_from_37.0C,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
+exclude,Day 10 Flow Cytometry Incubator Out CO2 Saturation (%) dev_from_5.0pct,Missing 01,Ghent,retired,Not recorded anymore.,2028-04-01,Degroeve
