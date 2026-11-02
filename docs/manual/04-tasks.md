@@ -101,7 +101,7 @@ from them are numbers, and stay in. `--keep-dates` lists none:
     # Dates and times at this site, as the build of 2026-10-21 14:03 found them
     # (dates_report.html): a model would learn when a batch was made. The durations
     # derived from them stay usable. Delete a line to use the date again.
-    - {column: "Day 3 incubator out", reason: "a date (date and time, step 5 of the timeline): a model would learn when a batch was made"}
+    - {column: "Day 3 incubator out", reason: "a date (date and time, position 5 on the timeline): a model would learn when a batch was made"}
 ```
 
 To also leave out every parameter that runs in groups over time, as a lot does

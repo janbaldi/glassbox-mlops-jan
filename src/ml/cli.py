@@ -516,7 +516,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
         )
         analysis.cohort = described[site]
         identified_by_site[site] = rows, analysis
-    # The dates: their order, the steps between them, and the batches' timing clusters.
+    # The dates: every date column on one timeline.
     dated_by_site = {}
     for site, (batches, analysed) in cohorts.items():
         rows, analysis = dates.for_build(
@@ -794,27 +794,29 @@ def _write_dates(
     content_digest: str,
     run_start: datetime,
 ) -> Path:
-    """Every date column per site (what ``ml task new`` leaves out), its steps, and each
-    batch's timing cluster."""
-    parameters = [
-        {"Site": site, **row} for site, (rows, _) in dated_by_site.items() for row in rows
-    ]
-    steps = [
-        {"Site": site, **row}
-        for site, (_, a) in dated_by_site.items()
-        for row in dates.step_rows(a)
-    ]
-    batches = [
-        {"Site": site, **row}
-        for site, (_, a) in dated_by_site.items()
-        for row in dates.batch_rows(a)
-    ]
+    """Every date column per site (what ``ml task new`` leaves out), the pairs some batch
+    reverses, each batch's order, and each batch's place of every column on the timeline."""
+    sheets = {
+        screening.EVIDENCE_SHEET: [
+            {"Site": site, **row} for site, (rows, _) in dated_by_site.items() for row in rows
+        ],
+        "Reversed pairs": [
+            {"Site": site, **row} for site, (_, a) in dated_by_site.items() for row in a.swaps
+        ],
+        "Batches": [
+            {"Site": site, **row}
+            for site, (_, a) in dated_by_site.items()
+            for row in dates.batch_rows(a)
+        ],
+        "Days": [
+            {"Site": site, **row}
+            for site, (_, a) in dated_by_site.items()
+            for row in dates.day_rows(a)
+        ],
+    }
     with pd.ExcelWriter(path) as workbook:
-        pd.DataFrame(parameters).to_excel(
-            workbook, sheet_name=screening.EVIDENCE_SHEET, index=False
-        )
-        pd.DataFrame(steps).to_excel(workbook, sheet_name="Steps", index=False)
-        pd.DataFrame(batches).to_excel(workbook, sheet_name="Batches", index=False)
+        for name, rows in sheets.items():
+            pd.DataFrame(rows).to_excel(workbook, sheet_name=name, index=False)
         pd.DataFrame(
             [
                 {"Item": "Batch table content digest", "Value": content_digest},
@@ -1439,7 +1441,11 @@ def _dates_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[str, 
         (
             row["Parameter"],
             f"a date ({row['Kind']}"
-            + (f", step {int(row['Position'])} of the timeline" if row["Position"] != "" else "")
+            + (
+                f", position {int(row['Position'])} on the timeline"
+                if row["Position"] != ""
+                else ""
+            )
             + "): a model would learn when a batch was made",
         )
         for row in here.to_dict("records")

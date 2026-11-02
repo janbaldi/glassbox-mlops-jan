@@ -16,7 +16,7 @@ through it again. Each site's outputs go into a folder named after it.
 3. `ml build`: the batch table, the build report, and the identifiers, dates, missingness, correlation and shifts reports.
 4. Read the build report.
 5. Read the identifiers report: decide on the possible identifiers, and screen out the ones no task should use ([chapter 3](03-screening.md)).
-6. Read the dates report: the order of each batch's dates, and how the batches cluster by their timing.
+6. Read the dates report: every date column on one timeline, in order, by day and by time of day.
 7. Read the missingness report, then the correlation and shifts reports, and record any screening decision.
 8. `ml screening status`: no standing decision is contradicted by the new data.
 9. Rerun the tasks you maintain ([chapter 4](04-tasks.md)).
@@ -163,46 +163,52 @@ every row, which `ml task new` reads.
 
 ## 6. Read the dates report
 
-Open `dates_report.html`. It is about the site's **date and time columns**: in what
-order each batch's timepoints fall, how long the steps between them take, and
-whether the batches fall into groups that were run to a different timing. It
-describes the same batches as the missingness report. Nothing here needs a decision:
-`ml task new` leaves every date column out of a new task anyway (a model fitted on a
-date learns when a batch was made; [chapter 4](04-tasks.md#1-create-a-task)). The
-durations the build derives from the dates are numbers, and stay usable. Read it for
-what the timing says about the process.
+Open `dates_report.html`. It puts every **date and time column** of the site on one
+timeline: what comes after what, on which day, at what time of day, and where the
+records contradict that order. It describes the same batches as the missingness
+report. Nothing here needs a decision: `ml task new` leaves every date column out of
+a new task anyway (a model fitted on a date learns when a batch was made;
+[chapter 4](04-tasks.md#1-create-a-task)). The durations the build derives from the
+dates are numbers, and stay usable. Read it for what the dates say about the
+process, and for the records that cannot be right.
 
-**What the dates say** puts every finding in a sentence. Then:
+Days count from the **anchor** (`build.date_column`): *day 0* is the anchor's
+calendar day, *day 3* the third calendar day after it, whatever the hour.
 
-- **Timing clusters.** The batches clustered on the durations of their steps (see
-  below), each cluster with what sets it apart (*feed → harvest 86 h, against 48 h
-  in the other batches*). *Each batch's timeline* draws every batch through its
-  timepoints, one thin line each, with each cluster's median in bold: where the bold
-  lines part, the clusters differ. *When each timing cluster ran* puts each batch on
-  the calendar, one lane per cluster: lanes that follow one another are **eras** (the
-  timing changed: a new procedure, a process change), lanes side by side are
-  day-to-day variation. The findings say which, with a runs test, and whether the
-  weekday a batch starts on goes with its cluster (a weekend inside the process
-  lengthens the step it falls on). A cluster no step sets apart by 10% of its length
-  is not reported: then the batches run to one timing.
-- **The order of the date columns.** The columns sorted by their median time after
-  the batch's anchor (`build.date_column`), with a heatmap of how often each comes
-  before each other: a light cell above the diagonal is a pair that swaps places in
-  some batches, a recording error or a step done in a different order. The table
-  gives per column its kind (date and time, date only, or time of day only, which
-  cannot be placed on a timeline), its spread, *Out of order*, *Same as* another
-  column, the share on a weekend, its time of day and its drift over the months.
-- **Steps between the columns.** A step is two columns next to each other in that
-  order. Its duration's median and spread, how often it is negative, and whether it
-  lengthens or shortens over the months, with one small plot per step over the
-  calendar.
-- **How the batches relate in time.** Batches in progress at once, the days between
-  consecutive starts.
+- **What the dates say.** Every finding in a sentence: the process day by day
+  (*day 0: thaw → seeding; day 3: feed; …*), the longest wait, the columns with no
+  fixed day, the pairs some batches reverse (with the batches), columns that come
+  later or earlier over the months, columns recorded only from some date on, steps
+  done at night or at any time of day, and lot dates.
+- **Explore the timeline.** Click a column to draw its place, batch by batch, over
+  the months: a step that moved shows as a jump. Click a batch to draw its timeline
+  over the typical batch's: a timepoint out of order is orange, a missing one has
+  no dot. Sort the batches by *Pairs reversed* to find the ones that break the order.
+- **The timeline.** Every column in the order the process runs in, every batch a grey
+  dot, the bar the middle half of the batches and the ringed dot the median, with the
+  calendar days as bands. The phases table names what happens on each day, and the
+  heatmap gives, per column, the share of its batches on each day: a column named
+  *Day 3 …* that is mostly on day 0 shows at once.
+- **The order.** How often each column comes before each other (above the diagonal
+  should be dark), every pair reversed in at least one batch with the batches, and
+  the batches that reverse most. A reversal is a recording error, or a step not
+  always done in the same order.
+- **The time of day.** Each column's clock time, read round the clock (a step done
+  around midnight is drawn across it), with the night hours shaded; the
+  time-of-day-only columns are here too.
+- **Over the calendar.** Which batches have each column (a gap is a stretch without
+  it), with the batches where it is out of order in orange; and the age of each lot
+  or material date at the anchor (a vector's manufacture date: batches on one lot
+  sit on a rising line, a new lot is a jump down).
+- **Every date column.** One row per column: kind, position, usual day and the share
+  on it, median and spread, the wait since the column before it, how often it comes
+  first, what it swaps with, *Same as*, time of day, weekend share, first and last
+  recorded, and drift.
 
-A date shared by batches started weeks apart (a vector's manufacture date) is the
-date of a lot or a material, not of the batch: it is told as its age at the anchor,
-and kept out of the steps and the clusters. `dates.xlsx` holds every date column,
-every step, and each batch's cluster.
+A date shared by batches started weeks apart is the date of a lot or a material, not
+of the batch: it is told as its age, off the timeline. `dates.xlsx` holds every date
+column, every reversed pair, each batch's order, and each batch's place of every
+column (in days).
 
 ## 7. Read the missingness report
 
