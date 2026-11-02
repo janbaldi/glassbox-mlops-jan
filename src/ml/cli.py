@@ -110,6 +110,7 @@ CATALOG_OUTPUTS = {
 BUILD_OUTPUTS = {
     "report": "build_report.html",
     "identifiers report": "identifiers_report.html",
+    "identifiers table": "identifiers.xlsx",
     "missingness report": "missingness_report.html",
     "missingness table": screening.EVIDENCE_FILE,
     "correlation report": "correlation_report.html",
@@ -499,6 +500,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
         described[site] = "; ".join(filter(None, (cohort, counted)))
     # First what names a batch rather than describes it, then how the rest goes missing.
     identified_by_site = {}
+    from_sources = {c: label for label in identifiers.SOURCES for c in origins.get(label, [])}
     for site, (batches, analysed) in cohorts.items():
         rows, analysis = identifiers.for_build(
             batches,
@@ -507,6 +509,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
             order_column=names.col(date_column),
             analysed=analysed,
             **_identifier_thresholds(config),
+            sources=from_sources,
         )
         analysis.cohort = described[site]
         identified_by_site[site] = rows, analysis
@@ -614,6 +617,11 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
             files["identifiers report"] = report.write(
                 report.build_identifiers_payload(build_run), identifiers_report
             )
+        identifiers_table = staged / BUILD_OUTPUTS["identifiers table"]
+        with _preparing("the identifiers table", identifiers_table, folder):
+            files["identifiers table"] = _write_found(
+                identifiers_table, "Site", identified_by_site, content_digest, run_start
+            )
         missing_report = staged / BUILD_OUTPUTS["missingness report"]
         with _preparing("the missingness report", missing_report, folder):
             files["missingness report"] = report.write(
@@ -626,8 +634,8 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
             )
         shifts_table = staged / BUILD_OUTPUTS["shifts table"]
         with _preparing("the shifts table", shifts_table, folder):
-            files["shifts table"] = _write_shifts(
-                shifts_table, shifted_by_site, content_digest, run_start
+            files["shifts table"] = _write_found(
+                shifts_table, "Manufacturing site", shifted_by_site, content_digest, run_start
             )
         correlation_report = staged / BUILD_OUTPUTS["correlation report"]
         with _preparing("the correlation report", correlation_report, folder):
@@ -731,19 +739,18 @@ def _shifts_by_plant(
     return out
 
 
-def _write_shifts(
+def _write_found(
     path: Path,
-    shifted_by_plant: dict[str, tuple[list[dict], Any]],
+    label: str,
+    results: dict[str, tuple[list[dict], Any]],
     content_digest: str,
     run_start: datetime,
 ) -> Path:
-    """Every parameter that runs in groups over time, per plant: what
-    ``ml task new --exclude-shifting`` leaves out of a task."""
-    rows = [
-        {"Manufacturing site": plant, **row}
-        for plant, (found, _) in shifted_by_plant.items()
-        for row in found
-    ]
+    """A report's rows per site (or plant, named in a ``label`` column), and the build they
+    came from: what ``ml task new`` reads. The shifts table holds every parameter that runs
+    in groups over time (``--exclude-shifting``), the identifiers table every identifier
+    and possible identifier."""
+    rows = [{label: where, **row} for where, (found, _) in results.items() for row in found]
     with pd.ExcelWriter(path) as workbook:
         pd.DataFrame(rows).to_excel(workbook, sheet_name=screening.EVIDENCE_SHEET, index=False)
         pd.DataFrame(
@@ -1288,6 +1295,53 @@ def _shifting_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[st
             + (f", changes with {group}" if group else "")
         )
     return [(p, "runs in groups over time: " + "; ".join(w)) for p, w in why.items()], built
+
+
+def _identifiers_for_new_task(
+    config: dict[str, Any] | None,
+) -> tuple[list[tuple[str, str]], str]:
+    """Every clear identifier the latest build found at the site, with why, for a new task
+    file; and when that build ran. One the register reinstated in the identifiers report is
+    left in. Without a build to read, a warning and nothing."""
+    if not config:
+        log.warn(
+            MODULE, "No config.yaml found: the new task file lists no identifiers to leave out"
+        )
+        return [], ""
+    workspace.load_vocabulary(config)
+    where = workspace.batch_table_folder(config).file(BUILD_OUTPUTS["identifiers table"])
+    try:
+        found = share.read_excel(where.with_sheet(screening.EVIDENCE_SHEET))
+        about = share.read_excel(where.with_sheet(screening.ABOUT_SHEET))
+    except Exception as exc:
+        log.warn(
+            MODULE,
+            f"The latest build's identifiers table could not be read ({exc}): the new task file "
+            "lists no identifiers to leave out — run `ml build`, then make the task again",
+            str(where),
+        )
+        return [], ""
+    built = dict(zip(about["Item"].astype(str), about["Value"].astype(str))).get("Built", "")
+    if found.empty:
+        return [], built
+    site = workspace.site_name(config)
+    reinstated = set()
+    if workspace.has(config, "screening"):
+        try:
+            decisions = screening.for_site(_register(config).decisions, site)
+            reinstated = {
+                parameter
+                for (parameter, _, track), d in screening.current(decisions, (site,)).items()
+                if track == screening.IDENTIFIERS and d.action == screening.REINSTATE
+            }
+        except Exception:  # the screened list warned already
+            pass
+    clear = found[(found["Site"] == site) & (found["Status"] == identifiers.IDENTIFIER)]
+    return [
+        (row["Parameter"], f"identifier ({identifiers.evidence(row)})")
+        for row in clear.fillna("").to_dict("records")
+        if row["Parameter"] not in reinstated
+    ], built
 
 
 def write_task_catalog(config: dict[str, Any], spec: TaskSpec) -> Path:
@@ -1926,6 +1980,12 @@ def _parser() -> argparse.ArgumentParser:
         help="also exclude every parameter the latest build's shifts report finds running in "
         "groups over time, each with why",
     )
+    new.add_argument(
+        "--keep-identifiers",
+        action="store_true",
+        help="do not exclude the identifiers the latest build's identifiers report finds "
+        "(excluded by default, each with why)",
+    )
     catalog_cmd = actions.add_parser(
         "catalog",
         help="write the task's task_catalog.xlsx again: the parameters it can use as inputs",
@@ -1976,8 +2036,12 @@ def _run(args) -> int:
     if command == "task new":
         found = _config(args, start=args.folder, required=False)
         screened, as_of, conflicts = _screened_for_new_task(found)
+        identified, identified_built = (
+            ([], "") if args.keep_identifiers else _identifiers_for_new_task(found)
+        )
+        identified = [(p, why) for p, why in identified if p not in dict(screened)]
         shifting, built = _shifting_for_new_task(found) if args.exclude_shifting else ([], "")
-        shifting = [(p, why) for p, why in shifting if p not in dict(screened)]
+        shifting = [(p, why) for p, why in shifting if p not in dict(screened + identified)]
         path = scaffold.init(
             args.folder,
             args.target,
@@ -1990,6 +2054,8 @@ def _run(args) -> int:
             site=workspace.site_key(found) if found else "",
             shifting=shifting,
             shifting_built=built,
+            identified=identified,
+            identified_built=identified_built,
         )
         catalog = None
         if found:
@@ -2012,6 +2078,16 @@ def _run(args) -> int:
                 ("File", str(path)),
                 ("Usable inputs", str(catalog) if catalog else "not written (see above)"),
                 ("Config", found["__path__"] if found else "none found — set config: in the file"),
+                *(
+                    []
+                    if args.keep_identifiers
+                    else [
+                        (
+                            "Identifiers",
+                            f"{len(identified)} parameters excluded (build {identified_built})",
+                        )
+                    ]
+                ),
                 *(
                     [("Run in groups", f"{len(shifting)} parameters excluded (build {built})")]
                     if args.exclude_shifting

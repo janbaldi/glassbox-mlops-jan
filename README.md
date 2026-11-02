@@ -38,7 +38,7 @@ loop, new task, reproduce a run) to highlight it.
 | **catalog** | `catalog.xlsx` on SharePoint: every parameter the batch table may hold, with its type, stage and availability |
 | **site** | the manufacturing site everything is about: `site:` in `config.yaml` (`a` or `b`, as the vocabulary names them) |
 | **batch table** | `batch_data.xlsx` on SharePoint, in the site's folder: one row per batch of that site, cleaned, with calculated features |
-| **identifiers report** | `identifiers_report.html`, read first: which parameters name a batch rather than describe it (codes unique to a batch, running numbers, free text), to screen out |
+| **identifiers report** | `identifiers_report.html`, read first: which parameters name something rather than describe the batch (patient and case codes, lot and reference codes, running numbers, free text); `ml task new` leaves the clear ones out, the possible ones are yours to screen out |
 | **missingness report** | `missingness_report.html`: how every parameter goes missing at the site, batch by batch |
 | **correlation report** | `correlation_report.html`: which numerical parameters rank the site's batches alike, and which one could represent each group |
 | **shifts report** | `shifts_report.html`: which parameters run in groups over time, as a lot does, and which change on the same days, per manufacturing site; `ml task new --exclude-shifting` leaves them out of a task |
@@ -84,7 +84,7 @@ same with `site: b`. The `release` task is about site B and names that config, s
 Then open, in a browser:
 
 - `sharepoint/DEMO_DRIVE/Data/batch_data/Northfield/build_report.html`: where every column came from and what cleaning changed.
-- `sharepoint/DEMO_DRIVE/Data/batch_data/Northfield/identifiers_report.html`: which parameters name a batch rather than describe it.
+- `sharepoint/DEMO_DRIVE/Data/batch_data/Northfield/identifiers_report.html`: which parameters name something (a batch, a lot, a code) rather than describe the batch.
 - `sharepoint/DEMO_DRIVE/Data/batch_data/Northfield/missingness_report.html`: how each parameter goes missing.
 - `sharepoint/DEMO_DRIVE/Data/batch_data/Northfield/correlation_report.html`: which numerical parameters rank the batches alike.
 - `sharepoint/DEMO_DRIVE/Data/batch_data/Northfield/shifts_report.html`: which parameters run in groups over time, as the lots do, and which change on the same days.

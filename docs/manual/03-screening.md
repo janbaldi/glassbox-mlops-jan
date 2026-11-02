@@ -9,7 +9,11 @@ task, with the reason written down (and, for a redundant one, the parameter that
 represents it), until you decide otherwise. Parameters that run in groups over
 time, as a lot does (the shifts report), are left out per task instead, with
 `ml task new --exclude-shifting` ([chapter 4](04-tasks.md#1-create-a-task)): the
-shifts report neither reads nor writes the register.
+shifts report neither reads nor writes the register. The clear identifiers the
+identifiers report finds are left out of every new task by `ml task new` without
+a decision ([chapter 4](04-tasks.md#1-create-a-task)); its *possible* identifiers
+are yours to screen out here, and a reinstatement there keeps a clear one in new
+tasks.
 
 The *Screening loop* route of [the workflow map](../workflow.html) shows the
 whole cycle: reports, proposal, register, and back into the next build and
@@ -76,8 +80,8 @@ Good candidates for screening:
 
 | What you see | Reason to record |
 |---|---|
-| A *unique code*, *near-unique code* or *running number* in the identifiers report | `identifier` |
-| *Free text* in the identifiers report | `free text` |
+| A *possible identifier* in the identifiers report that no task should use | `identifier` |
+| An *identifier* the tasks you already have should leave out too (new tasks leave it out anyway) | `identifier`, or `free text` for free text |
 | *Retired*, with no value in the latest batches | `retired` |
 | *Introduced late*, with too little history yet | `introduced late` |
 | Mostly missing, or a value in too few batches to learn from | `too sparse` |

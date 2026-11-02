@@ -1,7 +1,7 @@
-"""The identifiers report: parameters that name a batch rather than describe it.
+"""The identifiers report: parameters that name something rather than describe the batch.
 
-They are found per site, shown first, and screened out through their own track of the
-screening register, which every task then applies.
+They are found per site, by general signs, and shown first. A new task leaves the clear
+ones out; the possible ones are screened out through their own track of the register.
 """
 
 from __future__ import annotations
@@ -13,82 +13,149 @@ import pandas as pd
 import pytest
 
 from conftest import shared
-from ml import cli, identifiers, names, screening, stlite
+from ml import cli, identifiers, names, screening, stlite, taskconfig
 
 SITES = ("North", "South")
 
 
 def _batches(n: int = 120) -> pd.DataFrame:
+    """One column per case, under names no real batch table has: the rules are general."""
     rng = np.random.default_rng(0)
     day = pd.Timestamp("2024-01-01") + pd.to_timedelta(np.arange(n), "D")
     return pd.DataFrame(
         {
-            "id": [f"B{i:03d}" for i in range(n)],
+            "key": [f"B{i:03d}" for i in range(n)],
             "date": day,
-            "patient": [f"PX{1200 + i % 3:04d}-{i:03d}" for i in range(n)],
-            # Two batches per case: half as many values as batches.
-            "case": [f"INV-{i // 2:03d}" for i in range(n)],
+            # A different value per batch, or nearly.
+            "subject": [f"PX{1200 + i % 3:04d}-{i:03d}" for i in range(n)],
+            "case": [f"INV-{i // 2:03d}" for i in range(n)],  # half as many values as batches
             "comment": [f"batch {i} was held by operator {rng.integers(9)}" for i in range(n)],
             "running": np.arange(1000, 1000 + n),
             "running as text": [str(5000 - i) for i in range(n)],
-            # Whole numbers, nearly all distinct, but not in date order: a count.
-            "count": rng.permutation(np.arange(n)) * 1000 + 7,
+            # Shared by many batches, but its number counts with time, under any name.
+            "buffer": [f"RX-{9000 + i // 15}" for i in range(n)],
+            "buffer reference": [f"RX-{9000 + i // 15}" for i in range(n)],
+            # Code-shaped and named as one, in no order.
+            "filter lot": rng.choice(["F-77", "F-12", "F-40", "F-03"], n),
+            # One sign each: code-shaped only, named only, a whole number named as one.
+            "vessel": rng.choice([f"BR{k}" for k in range(1, 7)], n),
+            "centre code": rng.choice(["ALPHA", "BETA", "GAMMA"], n),
+            "kit serial": rng.integers(100000, 100010, n),
+            # Joined from a source of identifiers, whatever it looks like.
+            "reagent": rng.choice(["kit A", "kit B"], n),
+            # Not identifiers.
+            "vessels number": rng.integers(1, 4, n),  # "number of …" counts things
+            "colour": rng.choice(["red", "green", "blue"], n),
+            "score": rng.choice(["1", "2", "3"], n),
+            "count": rng.permutation(np.arange(n)) * 1000 + 7,  # distinct, in no order
             "measured": rng.normal(size=n),
-            "lot": [f"L{i // 10}" for i in range(n)],
-            "operator": rng.choice(["X", "Y", "Z"], n),
-            "site": "North",
-            "harvest": (day + pd.Timedelta(days=9)).astype(str),
             "value as text": [f"{v:.2f}" for v in rng.normal(10, 2, n)],
-            "few": [None] * (n - 5) + ["a"] * 5,
+            "site": "North",
             "flag": rng.choice([True, False], n),
+            # Not judged.
+            "harvest": (day + pd.Timedelta(days=9)).astype(str),
+            "month": [d.strftime("%b-%Y") for d in day],
+            "few": [None] * (n - 5) + ["a"] * 5,
         }
     )
 
 
-def test_codes_running_numbers_and_free_text_are_found_and_nothing_else():
-    rows, report = identifiers.for_build(_batches(), {"case": "categorical"}, "id", "date")
-    kinds = {row["Parameter"]: row["Kind"] for row in rows}
-    assert kinds == {
-        "patient": identifiers.UNIQUE_CODE,
-        "case": identifiers.NEAR_UNIQUE_CODE,
-        "comment": identifiers.FREE_TEXT,
-        "running": identifiers.RUNNING_NUMBER,
-        "running as text": identifiers.RUNNING_NUMBER,
-    }
-    # Listed by kind, in the order the report explains them.
-    assert [row["Kind"] for row in rows] == sorted(
-        kinds.values(), key=list(identifiers.KINDS).index
+def _found(frame=None, **extra):
+    rows, report = identifiers.for_build(
+        _batches() if frame is None else frame,
+        {"case": "categorical", "score": "categorical"},
+        "key",
+        "date",
+        sources={"reagent": "Raw materials and consumables"},
+        **extra,
     )
-    assert report.not_analysed == {"harvest": "a date", "few": "fewer than 20 values"}
+    return {row["Parameter"]: row for row in rows}, report
+
+
+def test_every_kind_of_identifier_is_found_by_its_signs_and_nothing_else():
+    found, report = _found()
+    assert {p: (r["Status"], r["Kind"]) for p, r in found.items()} == {
+        "subject": ("identifier", "unique code"),
+        "case": ("identifier", "near-unique code"),
+        "running": ("identifier", "running number"),
+        "running as text": ("identifier", "running number"),
+        "buffer": ("identifier", "sequential code"),
+        "buffer reference": ("identifier", "sequential code"),
+        "filter lot": ("identifier", "lot or reference code"),
+        "reagent": ("identifier", "lot or reference code"),
+        "comment": ("identifier", "free text"),
+        "vessel": ("possible identifier", "possible identifier"),
+        "centre code": ("possible identifier", "possible identifier"),
+        "kit serial": ("possible identifier", "possible identifier"),
+    }
+    # The signs say why, in words.
+    assert found["buffer"]["Signs"] == (
+        "code-shaped (A-9); its number counts with the date (|ρ| 0.99)"
+    )
+    assert found["filter lot"]["Signs"] == "code-shaped (A-9); named as one ('lot')"
+    assert found["reagent"]["Signs"] == "from Raw materials and consumables"
+    assert found["vessel"]["Signs"] == "code-shaped (A9)"
+    assert found["centre code"]["Signs"] == "named as one ('code')"
+    assert found["kit serial"]["Signs"] == "named as one ('serial'), whole numbers"
+    # Clear identifiers first, by kind; the possible ones last.
+    statuses = [r["Status"] for r in found.values()]
+    assert statuses == sorted(statuses, key=lambda s: s == identifiers.POSSIBLE)
+    assert report.not_analysed == {
+        "harvest": "a date",
+        "month": "a date",
+        "few": "fewer than 20 values",
+    }
     # The key and the date take no part; every other column is judged.
     assert report.tested == _batches().shape[1] - 2 - len(report.not_analysed)
-    by_name = {row["Parameter"]: row for row in rows}
-    assert by_name["running as text"]["|ρ| with the date"] == 1.0
-    assert by_name["patient"]["Distinct %"] == 100.0
-    assert by_name["case"]["Most batches with one value"] == 2
-    assert by_name["patient"]["Examples"].startswith("PX1200-000 · PX1201-001")
+    assert found["running as text"]["|ρ| with the date"] == 1.0
+    assert found["case"]["Most batches with one value"] == 2
+    assert found["subject"]["Examples"].startswith("PX1200-000 · PX1201-001")
     # The viewer lists each one's value per batch, in date order.
     assert report.values["running"][:2] == ["1000", "1001"]
     assert len(report.values["running"]) == len(report.batches) == len(report.dates)
-    assert identifiers.evidence(by_name["running"]) == (
-        "running number, 120 of 120 distinct, |ρ| 1.00 with the date"
+    assert identifiers.evidence(found["filter lot"]) == (
+        "lot or reference code: code-shaped (A-9); named as one ('lot')"
     )
 
 
+def test_the_signs_are_general():
+    assert identifiers.shape("XY-104") == identifiers.shape("QR-7") == "A-9"
+    assert identifiers.named_as_identifier("Kit Lot #") == "#"
+    assert identifiers.named_as_identifier("Batch_ID") in ("batch", "id")
+    assert identifiers.named_as_identifier("Number of cycles", numeric=True) == ""
+    assert identifiers.named_as_identifier("Catalogue number") == "number"
+    codes = pd.Series(["AB-1", "AB-22", "CD-3"] * 10)
+    assert identifiers.code_shaped(codes)
+    assert not identifiers.code_shaped(pd.Series(["low", "high"] * 10)), "no digits"
+    assert not identifiers.code_shaped(pd.Series(["CD4 low", "CD4 high"] * 10)), "not one token"
+    assert not identifiers.code_shaped(pd.Series(["1", "22", "3"] * 10)), "numbers"
+    assert identifiers.code_shaped(pd.Series(["20431", "10022"] * 10), categorical=True)
+    # Two signs make an identifier, however the signs are typed.
+    frame = pd.DataFrame({"k": range(30), "site code": ["20431", "10022", "30017"] * 10})
+    rows, _ = identifiers.for_build(frame, {"site code": "categorical"}, "k", "")
+    assert [(r["Status"], r["Signs"]) for r in rows] == [
+        ("identifier", "code-shaped (9); named as one ('code')")
+    ]
+    # A short code is not read as a date.
+    rows, report = identifiers.for_build(
+        pd.DataFrame({"k": range(30), "m": ["M3", "T 12", "M4"] * 10}), {}, "k", ""
+    )
+    assert "m" not in report.not_analysed
+
+
 def test_the_thresholds_decide_what_a_code_is():
-    frame = _batches()
-    rows, _ = identifiers.for_build(frame, {}, "id", "date", unique=0.95, near_unique=0.6)
-    assert "case" not in {row["Parameter"] for row in rows}
-    rows, _ = identifiers.for_build(frame, {}, "id", "date", unique=0.4, near_unique=0.3)
-    assert {row["Parameter"]: row["Kind"] for row in rows}["case"] == identifiers.UNIQUE_CODE
+    found, _ = _found(near_unique=0.6)
+    assert "case" not in found or found["case"]["Kind"] != "near-unique code"
+    found, _ = _found(unique=0.4, near_unique=0.3)
+    assert found["case"]["Kind"] == identifiers.UNIQUE_CODE
 
 
 def test_only_the_batches_analysed_are_judged():
     frame = _batches()
     # Ten batches are too few to judge any column by.
     analysed = pd.Series(np.arange(len(frame)) < 10, index=frame.index)
-    rows, report = identifiers.for_build(frame, {}, "id", "date", analysed=analysed)
-    assert rows == [] and report.tested == 0 and len(report.batches) == 10
+    found, report = _found(frame, analysed=analysed)
+    assert found == {} and report.tested == 0 and len(report.batches) == 10
 
 
 # ---------------------------------------------------------------------------
@@ -204,37 +271,86 @@ def test_every_screening_report_shows_the_others_decisions():
 # ---------------------------------------------------------------------------
 # The build
 # ---------------------------------------------------------------------------
+def _table(built, config="config"):
+    path = shared(built["directory"], built[config], "batch_table", "identifiers.xlsx")
+    return pd.read_excel(path, sheet_name=screening.EVIDENCE_SHEET).fillna("")
+
+
 def test_the_build_writes_the_identifiers_report_first_and_cites_it(built):
     folder = shared(built["directory"], built["config"], "batch_table").parent
-    page = folder / "identifiers_report.html"
-    payload = stlite.read_payload(page.read_text(encoding="utf-8"))
+    payload = stlite.read_payload((folder / "identifiers_report.html").read_text("utf-8"))
     assert payload["title"] == "Batch table identifiers"
     viewer = next(b for b in payload["sections"][0]["blocks"] if b["kind"] == "id_viewer")
     assert viewer["proposal"]["report"] == "identifiers"
     assert viewer["proposal"]["reasons"] == ["identifier", "free text"]
     (site,) = viewer["sites"]
     assert site["label"] == names.site("a")
-    rows = [dict(zip(site["headers"], row)) for row in site["rows"]]
-    patient = names.col("patient_id")
-    assert {row["Parameter"]: row["Kind"] for row in rows} == {patient: "unique code"}
-    # The batch key and the date order the batches; they are not listed.
-    listed = {row["Parameter"] for row in rows} | {p for p, _ in site["not_analysed"]}
+    clear = {row[0] for row in site["rows"]}
+    possible = {row[0] for row in site["possible_rows"]}
+    table = _table(built)
+    # The page and the table hold the same, split by status.
+    assert clear == set(table.loc[table["Status"] == "identifier", "Parameter"])
+    assert possible == set(table.loc[table["Status"] == "possible identifier", "Parameter"])
+    assert names.col("patient_id") in clear
+    # Every column the raw materials export brought is an identifier.
+    raw = table[table["Signs"].str.contains("from Raw materials and consumables")]
+    assert set(raw["Status"]) <= {"identifier"}
+    # The batch key orders nothing and names every batch: not listed, nor judged.
+    listed = clear | possible | {p for p, _ in site["not_analysed"]}
     assert "Patient Lot/Batch #" not in listed
-    assert len(site["values"][patient]) == len(site["batches"])
-    # The evidence `ml screening add` cites says what it was found to be.
+    for parameter in clear | possible:
+        assert len(site["values"][parameter]) == len(site["batches"])
+    # The evidence `ml screening add` cites says what each was found to be.
     evidence = pd.read_excel(folder / screening.EVIDENCE_FILE, sheet_name=screening.EVIDENCE_SHEET)
     cited = evidence.set_index("Parameter")[screening.IDENTIFIER].fillna("")
-    assert cited[patient].startswith("unique code, ")
-    assert (cited != "").sum() == 1
+    assert set(cited[cited != ""].index) == clear | possible
+    assert cited[names.col("patient_id")].startswith("unique code: ")
     # Built before the missingness report.
     order = list(cli.BUILD_OUTPUTS)
     assert order.index("identifiers report") < order.index("missingness report")
 
 
-def test_a_site_with_nothing_found_still_says_so(built):
+def test_a_new_task_leaves_out_the_identifiers_but_not_the_possible_ones(built, tmp_path):
+    config = str(built["config_path"])
+    folder = tmp_path / "plain"
+    assert cli.main(["--config", config, "task", "new", str(folder)]) == 0
+    text = (folder / "task.yaml").read_text(encoding="utf-8")
+    assert "Identifiers at this site, as the build of" in text
+    excluded = dict(taskconfig.load(folder / "task.yaml").predictors.exclude)
+    table = _table(built)
+    clear = set(table.loc[table["Status"] == "identifier", "Parameter"])
+    possible = set(table.loc[table["Status"] == "possible identifier", "Parameter"])
+    screened = {p for p, why in excluded.items() if why.startswith("screened out by")}
+    assert clear - screened <= set(excluded)
+    assert all(excluded[p].startswith("identifier (") for p in clear - screened)
+    assert not (possible - screened) & set(excluded), "the possible ones are for a person"
+    # --keep-identifiers keeps them all.
+    kept = tmp_path / "kept"
+    assert cli.main(["--config", config, "task", "new", str(kept), "--keep-identifiers"]) == 0
+    reasons = dict(taskconfig.load(kept / "task.yaml").predictors.exclude).values()
+    assert not any(why.startswith("identifier (") for why in reasons)
+
+
+def test_a_reinstated_identifier_stays_in_new_tasks(built, tmp_path, monkeypatch):
+    table = _table(built)
+    patient = names.col("patient_id")
+    reinstated = [
+        _decision(1, "exclude", patient, site=names.site("a")),
+        _decision(2, "reinstate", patient, site=names.site("a")),
+    ]
+    monkeypatch.setattr(
+        cli, "_register", lambda config: screening.Register(reinstated, "the register")
+    )
+    found, _ = cli._identifiers_for_new_task(built["config"])
+    left_out = {p for p, _ in found}
+    assert patient not in left_out
+    assert left_out == set(table.loc[table["Status"] == "identifier", "Parameter"]) - {patient}
+
+
+def test_a_site_with_nothing_clear_still_says_so(built):
     folder = shared(built["directory"], built["config_b"], "batch_table").parent
     payload = stlite.read_payload((folder / "identifiers_report.html").read_text("utf-8"))
     viewer = next(b for b in payload["sections"][0]["blocks"] if b["kind"] == "id_viewer")
     (site,) = viewer["sites"]
-    assert site["rows"] == [] and site["label"] == names.site("b")
-    assert f"{names.site('b')} 0 of " in payload["lead"]
+    assert site["label"] == names.site("b")
+    assert f"{names.site('b')}: " in payload["lead"] and " identifiers and " in payload["lead"]

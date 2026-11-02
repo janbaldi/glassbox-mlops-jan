@@ -830,8 +830,8 @@ def render_timeline(segments: dict, drawn: list, key: str) -> None:
 
 
 def render_id_viewer(block: dict, key: str) -> None:
-    """The values of the parameter clicked on top; below it the parameters that name a batch,
-    to tick for a proposal, and what the register holds."""
+    """The values of the parameter clicked on top; below it the identifiers and the possible
+    identifiers, to tick for a proposal, and what the register holds."""
     labels = [site["label"] for site in block["sites"]]
     chosen = _pick_site(block.get("site_label") or "Site", labels, key)
     site = block["sites"][labels.index(chosen)]
@@ -840,20 +840,39 @@ def render_id_viewer(block: dict, key: str) -> None:
     plot = f"plot{key}-{chosen}"
     draw: dict = {}
     picked: list[str] = []
-    with st.expander(f"Parameters that name a batch ({len(site['rows'])})", expanded=True):
-        if site["rows"]:
-            table = f"rows{key}-{chosen}"
-            frame, ticked = _pick_table(site["headers"], site["rows"], site["formats"], table, plot)
-            picked += [frame.iloc[i]["Parameter"] for i in ticked]
-            draw[table] = lambda i: [frame.iloc[i]["Parameter"]]
-            st.markdown(
-                '<p class="batch_table-caption">Click a parameter to list its values; tick '
-                "parameters to propose a screening decision. Sort by a column header; search "
-                "with the magnifier at the table's top right.</p>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.caption("Nothing at this site names a batch rather than describes it.")
+    for name, rows, open_, caption, empty in (
+        (
+            "Identifiers",
+            site["rows"],
+            True,
+            "Clear identifiers. <code>ml task new</code> leaves every one out of a new task. "
+            "Click one to list its values; tick it to reinstate it for new tasks, or to exclude "
+            "it from every task through the register.",
+            "Nothing at this site is clearly an identifier.",
+        ),
+        (
+            "Possible identifiers: yours to decide",
+            site.get("possible_rows") or [],
+            True,
+            "One sign only (see <i>Signs</i>): an identifier, or a category worth keeping. "
+            "Click one to list its values; tick the ones no task should use and propose to "
+            "exclude them.",
+            "Nothing at this site is a possible identifier.",
+        ),
+    ):
+        with st.expander(f"{name} ({len(rows)})", expanded=open_):
+            if rows:
+                table = f"{name[:8]}{key}-{chosen}"
+                frame, ticked = _pick_table(site["headers"], rows, site["formats"], table, plot)
+                picked += [frame.iloc[i]["Parameter"] for i in ticked]
+                draw[table] = lambda i, frame=frame: [frame.iloc[i]["Parameter"]]
+                st.markdown(
+                    f'<p class="batch_table-caption">{caption} Sort by a column header; search '
+                    "with the magnifier at the table's top right.</p>",
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.caption(empty)
     picked += _register_tables(site, f"{key}-{chosen}", plot, draw)
     if site.get("not_analysed"):
         with st.expander(f"Not judged ({len(site['not_analysed'])})", expanded=False):

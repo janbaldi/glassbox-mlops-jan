@@ -15,7 +15,7 @@ through it again. Each site's outputs go into a folder named after it.
 2. `ml check-catalog`: the sources record nothing the catalog doesn't know about, or you add it.
 3. `ml build`: the batch table, the build report, and the identifiers, missingness, correlation and shifts reports.
 4. Read the build report.
-5. Read the identifiers report, and screen out what names a batch rather than describes it ([chapter 3](03-screening.md)).
+5. Read the identifiers report: decide on the possible identifiers, and screen out the ones no task should use ([chapter 3](03-screening.md)).
 6. Read the missingness report, then the correlation and shifts reports, and record any screening decision.
 7. `ml screening status`: no standing decision is contradicted by the new data.
 8. Rerun the tasks you maintain ([chapter 4](04-tasks.md)).
@@ -67,6 +67,7 @@ Written to SharePoint — 40 batches × 227 columns
   report                 build_report.html
   missingness table      missingness.xlsx
   identifiers report     identifiers_report.html
+  identifiers table      identifiers.xlsx
   missingness report     missingness_report.html
   correlation report     correlation_report.html
   shifts report          shifts_report.html
@@ -103,33 +104,59 @@ and 10 to 30 seconds to start. Look at these sections:
 
 ## 5. Read the identifiers report
 
-Open `identifiers_report.html` first. It lists the parameters that **name a batch
-rather than describe it**: a model can tell the batches apart by them, never learn
-what made one turn out as it did. Screen them out here, and the other reports no
-longer need to be read for them. It describes the same batches as the missingness
-report (below), and judges every column of the batch table but the batch key
-(every task's identifier already, kept next to the data), the date, and the dates.
+Open `identifiers_report.html` first. It lists the parameters that **name something
+rather than describe the batch**: a patient or case code, a raw material,
+consumable or vector lot, a reference to a document, a piece of equipment, a running
+number, a comment. A model can tell batches, lots or months apart by them, never
+learn what made a batch turn out as it did. It describes the same batches as the
+missingness report (below), and judges every column of the batch table but the
+batch key (every task's identifier already, kept next to the data), the date, and
+the dates. The rules are general: they look at the values and the name, never at
+a particular column.
 
-| Kind | What it is | Proposed as |
+It splits what it finds in two:
+
+- **Identifiers** are clear. `ml task new` leaves every one of them out of a new
+  task, listed under `predictors.exclude` with why ([chapter 4](04-tasks.md#1-create-a-task)).
+  Nothing to do, unless one is wrong: then tick it and propose **reinstate**, and new
+  tasks keep it. To leave one out of the tasks you already have too, propose
+  **exclude**.
+- **Possible identifiers** show one sign only, so they may as well be a category
+  worth keeping (an equipment code, a grade such as `G2`). **They are yours to
+  decide**: tick the ones no task should use, propose **exclude**, and run
+  `ml screening add`. Every task leaves them out from then on.
+
+The *Signs* column says why each one is listed:
+
+| Sign | What it means |
+|---|---|
+| code-shaped | Nine values in ten are one token with a digit in it, four in five of one shape (`XY-104` and `QR-7` are both `A-9`). |
+| named as one | A word of the name is *lot, batch, id, code, serial, barcode, ref, reference, number, …*, or the name has a `#`. |
+| from an identifier source | Joined from the raw materials and consumables export, which holds identifiers only. |
+| counts with the date | The number in the value rises or falls with the batch date (\|ρ\| ≥ 0.8): a lot numbered in order, whether or not it runs in groups. |
+
+| Kind | Status | What it is |
 |---|---|---|
-| Unique code | A different value in at least 95% of the batches: a patient code, a case number, a sample id. | `identifier` |
-| Near-unique code | At least 50%: more categories than any encoder can learn from. A task drops it anyway. | `identifier` |
-| Running number | Whole numbers, at least 95% distinct, rising or falling with the date (\|ρ\| ≥ 0.95): it says when a batch was made, nothing else. | `identifier` |
-| Free text | Sentences (a median of 3 words or more), at least 50% distinct: comments, descriptions. | `free text` |
+| Unique code | identifier | A different value in at least 95% of the batches: a patient code, a case number. |
+| Near-unique code | identifier | At least 50%: more categories than any encoder can learn from. |
+| Running number | identifier | Whole numbers, at least 95% distinct, counting with the date (\|ρ\| ≥ 0.95). |
+| Sequential code | identifier | A code whose number counts with the date, and one more sign. |
+| Lot or reference code | identifier | From an identifier source, or code-shaped and named as one. |
+| Free text | identifier | Sentences (a median of 3 words or more), at least 50% distinct. Proposed as `free text`. |
+| Possible identifier | possible | Code-shaped, or named as one: not both. |
 
-A lot number shared by a run of batches is not listed: it says which lot was used,
-and the shifts report looks at it. Neither is a column with one value. The 95% and
-50% are `build.identifier_unique` and `build.identifier_near_unique` in
-`config.yaml`.
+A column with one value is not listed. The 95% and 50% are
+`build.identifier_unique` and `build.identifier_near_unique` in `config.yaml`.
 
 The tables work as in the other reports. **Click a row** to list the parameter's
 value in every batch, in date order, and check it is what its *Kind* says. **Tick**
-the ones no task should use and open **Propose a screening decision**: the reason is
-set from what you ticked (`identifier`, or `free text`). Download the proposal and
-run `ml screening add` ([chapter 3](03-screening.md#recording-a-decision)). The
+rows and open **Propose a screening decision**: the reason is set from what you
+ticked (`identifier`, or `free text`). Download the proposal and run
+`ml screening add` ([chapter 3](03-screening.md#recording-a-decision)). The
 *Register* column, *Screened out at this site* and *Screened out by the other
 reports* work as in the missingness report; *Not judged* (collapsed) lists the
-columns that take no part, and why.
+columns that take no part, and why. `identifiers.xlsx` in the same folder holds
+every row, which `ml task new` reads.
 
 ## 6. Read the missingness report
 

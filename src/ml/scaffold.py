@@ -35,14 +35,18 @@ def init(
     shifting_built: str = "",
     conflicts: list[str] = (),
     site: str = "",
+    identified: list[tuple[str, str]] = (),
+    identified_built: str = "",
 ) -> Path:
     """Write ``<folder>/task.yaml``, pointing at ``config``. Returns its path.
 
     ``screened`` is (parameter, reason) for every parameter the screening register
     excludes when the task is made, and ``shifting`` for every parameter the latest
     build (run at ``shifting_built``) found running in groups over time, when asked
-    for. They are written out as ``predictors.exclude`` entries, so the task file
-    itself says what it leaves out and why; ``conflicts`` (representatives the
+    for, and ``identified`` for every identifier the latest build (run at
+    ``identified_built``) found at the site. They are written out as
+    ``predictors.exclude`` entries, so the task file itself says what it leaves out
+    and why; ``conflicts`` (representatives the
     register excludes too) as comments above them. ``site`` is the key of the site
     the task is about (config.yaml's ``site:``).
     """
@@ -65,7 +69,15 @@ def init(
         .replace("__TARGET_TYPE__", "numeric")
         .replace(
             "  exclude: []                     # single columns: [{column: ..., reason: ...}]\n",
-            _excludes(screened, screened_as_of, shifting, shifting_built, conflicts),
+            _excludes(
+                screened,
+                screened_as_of,
+                shifting,
+                shifting_built,
+                conflicts,
+                identified,
+                identified_built,
+            ),
         )
     )
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -79,9 +91,11 @@ def _excludes(
     shifting: list[tuple[str, str]] = (),
     built: str = "",
     conflicts: list[str] = (),
+    identified: list[tuple[str, str]] = (),
+    identified_built: str = "",
 ) -> str:
     """The ``predictors.exclude`` lines of a new task: empty, or the parameters left out."""
-    if not screened and not shifting:
+    if not screened and not shifting and not identified:
         return "  exclude: []                     # single columns: [{column: ..., reason: ...}]\n"
     lines = ["  exclude:                        # single columns: [{column: ..., reason: ...}]"]
     if screened:
@@ -98,6 +112,14 @@ def _excludes(
             ]
             lines += [f"    #   {line}" for line in conflicts]
         lines += [_exclude(column, reason) for column, reason in screened]
+    if identified:
+        lines += [
+            f"    # Identifiers at this site, as the build of {identified_built} found them",
+            "    # (identifiers_report.html): they name a batch, a lot or a document rather than",
+            "    # describe the batch. Delete a line to use the parameter again, or reinstate it",
+            "    # in the identifiers report so new tasks keep it.",
+        ]
+        lines += [_exclude(column, reason) for column, reason in identified]
     if shifting:
         lines += [
             f"    # Run in groups over time at a manufacturing site, as the build of {built}",

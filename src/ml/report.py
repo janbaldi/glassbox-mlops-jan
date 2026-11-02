@@ -485,29 +485,34 @@ def _missingness_help(run: BuildRun) -> dict | None:
     }
 
 
-#: The identifiers report's parameter table, with its display formats.
+#: The identifiers report's parameter tables, with their display formats.
 _IDENTIFIER_FORMATS = {
     "Batches with a value": "%d",
     "Distinct values": "%d",
     "Distinct %": "%.1f",
     "Most batches with one value": "%d",
-    "Median words": "%.0f",
     "|ρ| with the date": "%.3f",
 }
 
 
 def _identifier_viewer(run: BuildRun) -> dict | None:
-    """Per site: the parameters that name a batch, to tick for a proposal, and the values of
-    the one clicked."""
+    """Per site: the identifiers and the possible identifiers, to tick for a proposal, and
+    the values of the one clicked."""
     sites = []
     for site, (rows, analysis) in run.identifiers.items():
         # A site with nothing found is still shown: that is a finding, and what it screened
         # out before can still be reinstated.
         rows = [
-            {"Parameter": row["Parameter"], "Register": row.get("Register", "")} | row
+            {"Parameter": row["Parameter"], "Register": row.get("Register", "")}
+            | {k: v for k, v in row.items() if k != "Status"}
             for row in rows
         ]
-        headers = list(rows[0]) if rows else ["Parameter", "Register", "Kind"]
+        status = {r["Parameter"]: r["Status"] for r in run.identifiers[site][0]}
+        headers = list(rows[0]) if rows else ["Parameter", "Register", "Kind", "Signs"]
+
+        def table_of(wanted: str) -> list[list]:
+            return [[row[h] for h in headers] for row in rows if status[row["Parameter"]] == wanted]
+
         sites.append(
             {
                 "label": site,
@@ -519,7 +524,8 @@ def _identifier_viewer(run: BuildRun) -> dict | None:
                 "kinds": {row["Parameter"]: row["Kind"] for row in rows},
                 "reason_of": dict(identifiers.REASON_OF),
                 "headers": headers,
-                "rows": [[row[h] for h in headers] for row in rows],
+                "rows": table_of(identifiers.IDENTIFIER),
+                "possible_rows": table_of(identifiers.POSSIBLE),
                 "formats": [_IDENTIFIER_FORMATS.get(h) for h in headers],
                 "not_analysed": [[p, why] for p, why in sorted(analysis.not_analysed.items())],
             }
@@ -539,25 +545,32 @@ def _identifiers_help(run: BuildRun) -> dict | None:
     if not run.identifiers:
         return None
     analysis = next(iter(run.identifiers.values()))[1]
+    words = ", ".join(f"*{w}*" for w in sorted(identifiers.ID_WORDS))
     return {
         "title": "Method",
         "blocks": [
             md(
                 "#### Reading the report\n\n"
                 "The report is about one site (config.yaml's site:). Each row is a parameter "
-                "that names a batch rather than describes it. Click a row to list its value in "
-                "every batch, in date order, and see that it is what its *Kind* says. ⊘ marks a "
-                "parameter this report already excludes here, ◇ one the missingness or "
-                "correlation report excludes.\n\n"
-                "Tick the ones no task should use, open *Propose a screening decision*, "
-                "and download the proposal: `ml screening add proposal.csv` adds it to the "
-                "register, and every task leaves them out from then on, with the decision as "
-                "the reason. A parameter you do not propose stays in. Read this report "
-                "first: what it screens out need not be looked at in the others.\n\n"
+                "that names something (a batch, a patient, a lot, a document, a piece of "
+                "equipment) rather than describes the batch. Click a row to list its value in "
+                "every batch, in date order. ⊘ marks a parameter this report already excludes "
+                "here, ◇ one the missingness or correlation report excludes.\n\n"
+                "- **Identifiers** are clear. `ml task new` leaves every one of them out of a "
+                "new task, listed under `predictors.exclude` with why (`--keep-identifiers` "
+                "keeps them). To keep one in every new task, tick it and propose *reinstate*; "
+                "to leave one out of the tasks you have already, propose *exclude*.\n"
+                "- **Possible identifiers** show one sign only: an equipment code or a grade "
+                "looks like this and may be a category worth keeping. They are yours to decide: "
+                "tick the ones no task should use, open *Propose a screening decision* and "
+                "download the proposal. `ml screening add proposal.csv` adds it to the register, "
+                "and every task leaves them out from then on, with the decision as the reason. "
+                "One you do not propose stays in.\n\n"
+                "Read this report first: what it finds need not be looked at in the others.\n\n"
                 "#### Why leave them out\n\n"
-                "A value no other batch shares lets a model tell the batches apart, never "
-                "learn what made one turn out as it did. Fitted on it, a model scores well "
-                "on the batches it has seen and has nothing to say about a new one. The "
+                "A value that names something lets a model tell batches, lots or months apart, "
+                "never learn what made a batch turn out as it did. Fitted on it, a model scores "
+                "well on the batches it has seen and has nothing to say about a new one. The "
                 "batch key (*Patient Lot/Batch #*) is every task's identifier already, kept "
                 "next to the data rather than in it, so it is not listed."
             ),
@@ -570,32 +583,53 @@ def _identifiers_help(run: BuildRun) -> dict | None:
                 ],
             ),
             md(
-                "#### How the numbers are decided\n\n"
+                "#### The signs\n\n"
+                "*Signs* says which of these a column shows; each is about the values or the "
+                "name, never about one particular column.\n\n"
+                "- **Code-shaped.** At least "
+                f"{identifiers.CODE_SHARE:.0%} of its values are one token (no space) with a "
+                f"digit in it, and at least {identifiers.SHAPE_SHARE:.0%} share one shape: "
+                "letters read as `A`, digits as `9`, so `XY-104` and `QR-7` are both `A-9`. "
+                "Numbers are not codes, unless the catalog types the column categorical and "
+                f"they have {identifiers.CODE_DIGITS} digits or more.\n"
+                f"- **Named as one.** A word of its name is one of {words}, or the name has a "
+                "`#`. For a numerical column, *number*, *nr* and *num* do not count: they "
+                "usually count something.\n"
+                "- **From an identifier source.** The build joined it from a source that holds "
+                "identifiers only: " + ", ".join(f"*{s}*" for s in identifiers.SOURCES) + ".\n"
+                "- **Counts with the date.** The number in its values (the last run of digits) "
+                "rises or falls with the batch date: Spearman |ρ| of at least "
+                f"{identifiers.TIME_RHO} over at least {identifiers.MIN_VALUES} batches and "
+                f"{identifiers.MIN_NUMBERS} distinct numbers (*|ρ| with the date*). A lot "
+                "numbered in order does this, whether or not it runs in groups (that is the "
+                "shifts report's question).\n\n"
+                "#### How the kinds are decided\n\n"
                 "The site is analysed on its own batches: the batches the missingness report "
                 "counts in its statistics. Every column of the batch table takes part, "
                 "whatever the screening register says of it, except the batch key, the date "
                 "the batches are ordered by, and dates (catalog type *datetime*, or values "
                 f"that are dates). A column needs {identifiers.MIN_VALUES} batches with a value "
-                "to be judged; *Not judged*, in the viewer, lists the others and why.\n\n"
-                "- **Distinct %** is a column's distinct values over its batches with a "
-                "value: 100 when no two batches share one.\n"
-                "- **Words and codes.** A column whose values are not numbers, or that the "
-                "catalog types as categorical, is *free text* when its values have a median "
+                "and two distinct values; *Not judged*, in the viewer, lists the others and "
+                "why. *Distinct %* is its distinct values over its batches with a value.\n\n"
+                "- **Words and codes** (values that are not numbers, or a column the catalog "
+                "types categorical), in this order: *free text* when its values have a median "
                 f"of at least {identifiers.TEXT_WORDS} words and at least "
-                f"{analysis.near_unique:.0%} of them are distinct; else a *unique code* "
-                f"when at least {analysis.unique:.0%} are distinct, a *near-unique code* when "
-                f"at least {analysis.near_unique:.0%} are (`build.identifier_unique` and "
-                "`build.identifier_near_unique` in config.yaml). Numbers kept as text count "
-                "as numbers.\n"
-                "- **Numbers.** A numerical column is a *running number* when its values are "
-                f"whole, at least {analysis.unique:.0%} distinct, and rise or fall with the "
-                f"date: Spearman |ρ| of at least {identifiers.SEQUENCE_RHO} over the batches "
-                "with both (*|ρ| with the date*). Any other number describes the batch, "
-                "however many values it has.\n"
-                "- **Not identifiers.** A lot number shared by a run of batches carries what "
-                "the lot was; the shifts report looks at it. A column with one value is not "
-                "reported. *Most batches with one value* shows how far a code is from naming "
-                "a single batch."
+                f"{analysis.near_unique:.0%} are distinct; a *unique code* when at least "
+                f"{analysis.unique:.0%} are distinct, a *near-unique code* when at least "
+                f"{analysis.near_unique:.0%} are (`build.identifier_unique` and "
+                "`build.identifier_near_unique` in config.yaml); a *sequential code* (counts "
+                "with the date) or a *lot or reference code* when it comes from an identifier "
+                "source or shows two of code-shaped, named as one and counts with the date; a "
+                "*possible identifier* when it is code-shaped or named as one. Numbers kept as "
+                "text count as numbers.\n"
+                "- **Numbers.** A *running number* when its values are whole, at least "
+                f"{analysis.unique:.0%} distinct, and count with the date at |ρ| "
+                f"{identifiers.SEQUENCE_RHO} or more; a *lot or reference code* when it comes "
+                "from an identifier source; a *sequential code* when whole, named as one and "
+                "counting with the date; a *possible identifier* when whole and named as one. "
+                "Any other number describes the batch, however many values it has.\n"
+                "- A column with one value is not reported. *Most batches with one value* "
+                "shows how far a code is from naming a single batch."
             ),
         ],
     }
@@ -1152,17 +1186,24 @@ def build_batch_table_payload(run: BuildRun) -> dict[str, Any]:
 def build_identifiers_payload(run: BuildRun) -> dict[str, Any]:
     """The build's identifiers report: the first to read, before the missingness report."""
     found = ", ".join(
-        f"{site} {len(a.analysed):,} of {a.tested:,}" for site, (_, a) in run.identifiers.items()
+        f"{site}: {sum(r['Status'] == identifiers.IDENTIFIER for r in rows):,} identifiers and "
+        f"{sum(r['Status'] == identifiers.POSSIBLE for r in rows):,} possible identifiers "
+        f"among {a.tested:,} parameters"
+        for site, (rows, a) in run.identifiers.items()
     )
     return _grouped_payload(
         run,
         run.identifiers,
         _identifier_viewer(run),
         "Batch table identifiers",
-        "Which parameters name a batch rather than describe it at "
-        f"{' and '.join(run.merge.site_rows)}: codes unique to a batch, running numbers and "
-        "free text. A model can only memorise them. Screen them out here, before reading the "
-        "other reports. Parameters found — " + (found or "none") + ". " + run.register_note,
+        "Which parameters name something rather than describe the batch at "
+        f"{' and '.join(run.merge.site_rows)}: patient and case codes, lot and reference "
+        "codes, running numbers, free text. A model can only memorise them. `ml task new` "
+        "leaves the identifiers out of a new task; the possible identifiers are yours to "
+        "screen out. Read this before the other reports. Found — "
+        + (found or "none")
+        + ". "
+        + run.register_note,
         _identifiers_help(run),
     )
 
