@@ -1,6 +1,7 @@
 """The screening register: parameters left out of every task, and why.
 
-The build's missingness and correlation reports show how each parameter goes
+The build's identifiers, missingness and correlation reports show which
+parameters name a batch rather than describe it, how each parameter goes
 missing, and which rank the batches alike. Deciding that a parameter (or a
 group of them) is not fit to predict with, or is represented by another, is a
 judgement, and this module keeps those judgements in one place, the register: a
@@ -14,9 +15,9 @@ and the evidence it was made on, and the report it was made from: its track
 member of a correlated group is left out because another member, which stays
 usable, carries its information. Rows are only ever added, by ``ml screening
 add``; a change of mind is a new row. The state today is the log replayed in
-order: per parameter, site and track, the last decision stands, so a
-missingness exclusion and a correlation exclusion stand side by side, and
-reinstating one leaves the other. A parameter is excluded when any track
+order: per parameter, site and track, the last decision stands, so the
+exclusions of different reports stand side by side, and reinstating one leaves
+the others. A parameter is excluded when any track
 excludes it.
 
 A representative that is itself excluded leaves its group with nothing: that
@@ -57,6 +58,8 @@ EVIDENCE_SHEET = "Parameters"
 CORRELATION_GROUP = "Correlation group"
 #: The evidence column naming the member the correlation report suggests for its group.
 SUGGESTED = "Suggested representative"
+#: The evidence column saying what the identifiers report found a parameter to be.
+IDENTIFIER = "Identifier"
 ABOUT_SHEET = "About"
 
 #: The register's columns, in order.
@@ -77,9 +80,10 @@ COLUMNS = (
     "Review by",
     "Represented by",
     "Report",
+    IDENTIFIER,
 )
 #: Columns a register written before they existed may lack.
-OPTIONAL = ("Represented by", "Report")
+OPTIONAL = ("Represented by", "Report", IDENTIFIER)
 #: What a proposal holds; ``ml screening add`` fills in the rest.
 PROPOSAL_COLUMNS = (
     "Action",
@@ -100,11 +104,17 @@ ALL = "all"
 CORRELATED = "correlated with group"
 #: The reasons whose exclusions need a representative: its evidence group and suggestion columns.
 REPRESENTED = {CORRELATED: (CORRELATION_GROUP, SUGGESTED)}
-#: The reports a decision is made from. Each keeps its own state, and shows the other's.
-MISSINGNESS, CORRELATION = "missingness", "correlation"
-TRACKS = (MISSINGNESS, CORRELATION)
+#: Why the identifiers report leaves a parameter out: it names the batch, or describes it in
+#: words no two batches share.
+IDENTIFIED, FREE_TEXT = "identifier", "free text"
+#: The reports a decision is made from, in the order they are read. Each keeps its own
+#: state, and shows the others'.
+IDENTIFIERS, MISSINGNESS, CORRELATION = "identifiers", "missingness", "correlation"
+TRACKS = (IDENTIFIERS, MISSINGNESS, CORRELATION)
 #: Why a parameter is left out. Fixed, so decisions can be counted and compared.
 REASONS = (
+    IDENTIFIED,
+    FREE_TEXT,
     "never recorded",
     "retired",
     "introduced late",
@@ -117,7 +127,8 @@ REASONS = (
 )
 #: The reasons each report decides on.
 TRACK_REASONS = {
-    MISSINGNESS: tuple(r for r in REASONS if r != CORRELATED),
+    IDENTIFIERS: (IDENTIFIED, FREE_TEXT),
+    MISSINGNESS: tuple(r for r in REASONS if r not in (CORRELATED, IDENTIFIED, FREE_TEXT)),
     CORRELATION: (CORRELATED,),
 }
 #: A decision is looked at again after this long.
@@ -142,6 +153,7 @@ FIELDS = dict(
             "review_by",
             "represented_by",
             "report",
+            "identifier",
         ),
         COLUMNS,
     )
@@ -174,6 +186,8 @@ class Decision:
     review_by: str
     represented_by: str = ""
     report: str = ""
+    #: What the identifiers report found the parameter to be when it was decided on.
+    identifier: str = ""
 
     @property
     def track(self) -> str:
@@ -189,7 +203,7 @@ class Decision:
 
 def track_of(reason: str) -> str:
     """The report a reason is decided in."""
-    return CORRELATION if reason in TRACK_REASONS[CORRELATION] else MISSINGNESS
+    return next((t for t, reasons in TRACK_REASONS.items() if reason in reasons), MISSINGNESS)
 
 
 def labels(decisions: list[Decision]) -> str:
@@ -236,7 +250,7 @@ def from_frame(frame: pd.DataFrame, sites: tuple[str, ...], source: str = "") ->
         if fields["Reason"] and fields["Reason"] not in REASONS:
             errors.append(f"{where}: Reason '{fields['Reason']}' is not one of the list")
         elif fields["Report"] and fields["Report"] not in TRACKS:
-            errors.append(f"{where}: Report '{fields['Report']}' is not {' or '.join(TRACKS)}")
+            errors.append(f"{where}: Report '{fields['Report']}' is not one of {', '.join(TRACKS)}")
         elif fields["Report"] and fields["Reason"] not in TRACK_REASONS[fields["Report"]]:
             errors.append(
                 f"{where}: Reason '{fields['Reason']}' is not decided in the "
@@ -375,7 +389,7 @@ def at_site(
     decisions: list[Decision], sites: tuple[str, ...], site: str, track: str
 ) -> tuple[dict[str, dict], dict[str, dict]]:
     """Parameter → its standing exclusion at ``site``: the ones ``track``'s report made,
-    and the ones the other report made, which it shows but does not change."""
+    and the ones the other reports made, which it shows but does not change."""
     own: dict[str, dict] = {}
     other: dict[str, dict] = {}
     for (parameter, where), found in standing(decisions, sites).items():
@@ -398,20 +412,24 @@ def evidence_frame(missing_by_site: dict[str, list[dict]]) -> pd.DataFrame:
 
 
 def _evidence(evidence: pd.DataFrame, parameter: str, sites: tuple[str, ...]) -> dict[str, str]:
-    """Missing %, pattern and last measurement of one parameter at ``sites``."""
+    """Missing %, pattern and last measurement of one parameter at ``sites``, and what the
+    identifiers report found it to be (a build from before it has no such column)."""
     found = evidence[(evidence["Parameter"] == parameter) & evidence["Site"].isin(sites)]
     many = len(sites) > 1
 
     def joined(column: str) -> str:
+        if column not in found.columns:
+            return ""
         return "; ".join(
             f"{row['Site']} {_text(row[column])}" if many else _text(row[column])
             for _, row in found.iterrows()
         )
 
     return {
-        "Missing %": joined("Missing %"),
-        "Pattern": joined("Pattern"),
-        "Last measured": joined("Last measured"),
+        "missing": joined("Missing %"),
+        "pattern": joined("Pattern"),
+        "last_measured": joined("Last measured"),
+        "identifier": joined(IDENTIFIER),
     }
 
 
@@ -470,7 +488,7 @@ def add(
         if reason not in REASONS:
             problems.append(f"Reason '{reason}' is not one of: {', '.join(REASONS)}")
         elif track not in TRACKS:
-            problems.append(f"Report '{track}' is not {' or '.join(TRACKS)}")
+            problems.append(f"Report '{track}' is not one of {', '.join(TRACKS)}")
         elif reason not in TRACK_REASONS[track]:
             problems.append(f"Reason '{reason}' is not decided in the {track} report")
         if not fields["Parameter"] and not fields["Group"]:
@@ -563,12 +581,7 @@ def add(
                     group=fields["Group"],
                     reason=reason,
                     rationale=fields["Rationale"],
-                    **dict(
-                        zip(
-                            ("missing", "pattern", "last_measured"),
-                            _evidence(evidence, member, covered).values(),
-                        )
-                    ),
+                    **_evidence(evidence, member, covered),
                     batch_table=batch_table,
                     review_by=review if action == EXCLUDE else "",
                     represented_by=instead if action == EXCLUDE else "",
@@ -624,6 +637,12 @@ def review(
             rate = pd.to_numeric(pd.Series([row.get("Missing %")]), errors="coerce").iloc[0]
             if then is not None and pd.notna(rate) and abs(rate - then) >= DRIFT_POINTS:
                 reasons.append(f"missing {then:.0f}% then, {rate:.0f}% now")
+            if (
+                decision.track == IDENTIFIERS
+                and IDENTIFIER in now.columns
+                and not _text(row.get(IDENTIFIER))
+            ):
+                reasons.append("the identifiers report no longer finds it")
         if reasons:
             findings.append(
                 {

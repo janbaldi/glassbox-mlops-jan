@@ -270,16 +270,35 @@ def validate(config: dict[str, Any], source: str = "config") -> None:
     build = _mapping(
         config.get("build"),
         "build",
-        ("write_parquet", "date_column", "missingness_cohort", "correlation_threshold"),
+        (
+            "write_parquet",
+            "date_column",
+            "missingness_cohort",
+            "correlation_threshold",
+            "identifier_unique",
+            "identifier_near_unique",
+        ),
         errors,
     )
-    threshold = build.get("correlation_threshold")
-    if threshold is not None and (
-        isinstance(threshold, bool)
-        or not isinstance(threshold, (int, float))
-        or not 0 < threshold <= 1
+    for key in ("correlation_threshold", "identifier_unique", "identifier_near_unique"):
+        threshold = build.get(key)
+        if threshold is not None and (
+            isinstance(threshold, bool)
+            or not isinstance(threshold, (int, float))
+            or not 0 < threshold <= 1
+        ):
+            errors.append(f"build.{key}: expected a number above 0 and at most 1")
+    unique, near = build.get("identifier_unique"), build.get("identifier_near_unique")
+    if (
+        isinstance(unique, (int, float))
+        and isinstance(near, (int, float))
+        and not isinstance(unique, bool)
+        and not isinstance(near, bool)
+        and near > unique
     ):
-        errors.append("build.correlation_threshold: expected a number above 0 and at most 1")
+        errors.append(
+            f"build.identifier_near_unique: expected at most build.identifier_unique, {unique}"
+        )
     cohort = _mapping(
         build.get("missingness_cohort"),
         "build.missingness_cohort",

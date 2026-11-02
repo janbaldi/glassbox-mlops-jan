@@ -473,7 +473,7 @@ def render_proposal(
             )[0]
         if blocked:
             st.warning(
-                "Excluded in the missingness report, so it cannot represent others — pick "
+                "Excluded by another report, so it cannot represent others — pick "
                 "another representative (see *Best usable representative*): " + ", ".join(blocked)
             )
         if done:
@@ -521,6 +521,55 @@ def _pick_site(label: str, labels: list, key: str) -> str:
         return st.radio(label, labels, horizontal=True, key=f"site{key}")
 
 
+def _conflicts(site: dict) -> None:
+    """A banner naming the representatives at the site that are excluded themselves."""
+    if site.get("conflicts"):
+        st.warning(
+            "⚠ **Screening conflict** — a representative that is excluded itself leaves its "
+            "whole group out:\n\n" + "\n".join(f"- {line}" for line in site["conflicts"])
+        )
+
+
+def _register_tables(site: dict, key: str, plot: str, draw: dict) -> list:
+    """What the register holds at the site: this report's exclusions, to tick and reinstate,
+    and the other reports', read only. Returns the ticked parameters."""
+    screened = site.get("screened") or {}
+    elsewhere = site.get("elsewhere") or {}
+    picked = []
+    with st.expander(f"Screened out at this site ({len(screened)})", expanded=bool(screened)):
+        if screened:
+            headers = ["Parameter", *next(iter(screened.values()))]
+            rows = [[name, *decision.values()] for name, decision in screened.items()]
+            table = f"screened{key}"
+            listed, ticked = _pick_table(headers, rows, [None] * len(headers), table, plot)
+            picked += [listed.iloc[i]["Parameter"] for i in ticked]
+            draw[table] = lambda i: [listed.iloc[i]["Parameter"]]
+            st.markdown(
+                '<p class="batch_table-caption">The standing exclusions this report made at '
+                "this site (⊘). Every task leaves these out. Click one to draw it; tick them to "
+                "reinstate them.</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("This report has screened nothing out at this site.")
+    with st.expander(f"Screened out by the other reports ({len(elsewhere)})", expanded=False):
+        if elsewhere:
+            headers = ["Parameter", *next(iter(elsewhere.values()))]
+            rows = [[name, *decision.values()] for name, decision in elsewhere.items()]
+            table = f"elsewhere{key}"
+            listed, _ = _pick_table(headers, rows, [None] * len(headers), table, plot, tick=False)
+            draw[table] = lambda i: [listed.iloc[i]["Parameter"]]
+            st.markdown(
+                '<p class="batch_table-caption">The standing exclusions the other reports made '
+                "at this site (◇), each with its report. Every task leaves these out too; "
+                "reinstate them in the report that made them.</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("The other reports have screened nothing out at this site.")
+    return picked
+
+
 def render_missing_viewer(block: dict, key: str) -> None:
     """The plot on top; below it the groups and the parameters: click one to draw it.
 
@@ -532,14 +581,8 @@ def render_missing_viewer(block: dict, key: str) -> None:
     labels = [site["label"] for site in block["sites"]]
     chosen = _pick_site(block.get("site_label") or "Site", labels, key)
     site = block["sites"][labels.index(chosen)]
-    screened = site.get("screened") or {}
-    elsewhere = site.get("elsewhere") or {}
-    other = "the missingness report" if mode == "rank" else "the correlation report"
-    if site.get("conflicts"):
-        st.warning(
-            "⚠ **Screening conflict** — a representative that is excluded itself leaves its "
-            "whole group out:\n\n" + "\n".join(f"- {line}" for line in site["conflicts"])
-        )
+    other = "the other reports"
+    _conflicts(site)
     top = st.container()
     plot = f"plot{key}-{chosen}"
     draw: dict = {}
@@ -571,37 +614,7 @@ def render_missing_viewer(block: dict, key: str) -> None:
             )
         else:
             st.caption(f"No group of parameters {together} at this site.")
-    with st.expander(f"Screened out at this site ({len(screened)})", expanded=bool(screened)):
-        if screened:
-            headers = ["Parameter", *next(iter(screened.values()))]
-            rows = [[name, *decision.values()] for name, decision in screened.items()]
-            table = f"screened{key}-{chosen}"
-            listed, ticked = _pick_table(headers, rows, [None] * len(headers), table, plot)
-            picked += [listed.iloc[i]["Parameter"] for i in ticked]
-            draw[table] = lambda i: [listed.iloc[i]["Parameter"]]
-            st.markdown(
-                '<p class="batch_table-caption">The standing exclusions this report made at '
-                "this site (⊘). Every task leaves these out. Click one to draw it; tick them to "
-                "reinstate them.</p>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.caption("This report has screened nothing out at this site.")
-    with st.expander(f"Screened out by {other} ({len(elsewhere)})", expanded=False):
-        if elsewhere:
-            headers = ["Parameter", *next(iter(elsewhere.values()))]
-            rows = [[name, *decision.values()] for name, decision in elsewhere.items()]
-            table = f"elsewhere{key}-{chosen}"
-            listed, _ = _pick_table(headers, rows, [None] * len(headers), table, plot, tick=False)
-            draw[table] = lambda i: [listed.iloc[i]["Parameter"]]
-            st.markdown(
-                '<p class="batch_table-caption">The standing exclusions '
-                f"{other} made at this site (◇). Every task leaves these out too; reinstate "
-                "them there.</p>",
-                unsafe_allow_html=True,
-            )
-        else:
-            st.caption(f"{other[0].upper() + other[1:]} has screened nothing out at this site.")
+    picked += _register_tables(site, f"{key}-{chosen}", plot, draw)
     pairs: list[tuple] = []
     with st.expander(f"Parameters in no group ({len(site['rows'])})", expanded=mode == "rank"):
         table = f"rows{key}-{chosen}"
@@ -686,7 +699,7 @@ def _short(text: str) -> str:
 
 
 def _marked(parameter: str, site: dict) -> str:
-    """A parameter's name, marked ⊘ when this report excludes it, ◇ when the other one does."""
+    """A parameter's name, marked ⊘ when this report excludes it, ◇ when another one does."""
     if parameter in (site.get("screened") or {}):
         return "⊘ " + parameter
     if parameter in (site.get("elsewhere") or {}):
@@ -816,6 +829,73 @@ def render_timeline(segments: dict, drawn: list, key: str) -> None:
     st.plotly_chart(figure, width="stretch", key=f"timeline{key}")
 
 
+def render_id_viewer(block: dict, key: str) -> None:
+    """The values of the parameter clicked on top; below it the parameters that name a batch,
+    to tick for a proposal, and what the register holds."""
+    labels = [site["label"] for site in block["sites"]]
+    chosen = _pick_site(block.get("site_label") or "Site", labels, key)
+    site = block["sites"][labels.index(chosen)]
+    _conflicts(site)
+    top = st.container()
+    plot = f"plot{key}-{chosen}"
+    draw: dict = {}
+    picked: list[str] = []
+    with st.expander(f"Parameters that name a batch ({len(site['rows'])})", expanded=True):
+        if site["rows"]:
+            table = f"rows{key}-{chosen}"
+            frame, ticked = _pick_table(site["headers"], site["rows"], site["formats"], table, plot)
+            picked += [frame.iloc[i]["Parameter"] for i in ticked]
+            draw[table] = lambda i: [frame.iloc[i]["Parameter"]]
+            st.markdown(
+                '<p class="batch_table-caption">Click a parameter to list its values; tick '
+                "parameters to propose a screening decision. Sort by a column header; search "
+                "with the magnifier at the table's top right.</p>",
+                unsafe_allow_html=True,
+            )
+        else:
+            st.caption("Nothing at this site names a batch rather than describes it.")
+    picked += _register_tables(site, f"{key}-{chosen}", plot, draw)
+    if site.get("not_analysed"):
+        with st.expander(f"Not judged ({len(site['not_analysed'])})", expanded=False):
+            st.dataframe(
+                pd.DataFrame(site["not_analysed"], columns=["Parameter", "Why"]),
+                hide_index=True,
+                width="stretch",
+            )
+            st.caption("Columns that take no part here, and why.")
+
+    picked = list(dict.fromkeys(picked))
+    if block.get("proposal"):
+        form = dict(block["proposal"])
+        # The reason the ticked parameters' kind is proposed with, when they share one.
+        reasons = {site["reason_of"][site["kinds"][p]] for p in picked if p in site["kinds"]}
+        if len(reasons) == 1:
+            form["reason"] = reasons.pop()
+        render_proposal(form, site, picked, f"{key}-{chosen}")
+    with top:
+        drawn = _drawn(plot, draw)
+        if not drawn:
+            st.caption("Click a row in a table below to list its value in every batch here.")
+            return
+        parameter = drawn[0]
+        values = site["values"].get(parameter)
+        if values is None:
+            st.caption(
+                f"{_marked(parameter, site)}: this build does not find it, so its values are "
+                "not kept here."
+            )
+            return
+        kind = site["kinds"].get(parameter, "")
+        st.markdown(f"**{html.escape(_marked(parameter, site))}** · {html.escape(kind)}")
+        st.dataframe(
+            pd.DataFrame({"Batch": site["batches"], "Date": site["dates"], "Value": values}),
+            hide_index=True,
+            width="stretch",
+            row_height=ROW_HEIGHT,
+            height=ROW_HEIGHT * (min(len(values), 10) + 1) + GUTTER,
+        )
+
+
 def render_shift_viewer(block: dict, key: str) -> None:
     """The groups over time of the row clicked; below, the groups and parameters to click."""
     labels = [site["label"] for site in block["sites"]]
@@ -930,6 +1010,8 @@ def render_block(block: dict, key: str) -> None:
         render_missing_viewer(block, key)
     elif kind == "shift_viewer":
         render_shift_viewer(block, key)
+    elif kind == "id_viewer":
+        render_id_viewer(block, key)
     elif kind == "chooser":
         labels = [option["label"] for option in block["options"]]
         chosen = st.selectbox(block["label"], labels, key=f"pick{key}")

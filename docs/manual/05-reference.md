@@ -12,8 +12,8 @@ Run as `uv run ml [--config FILE] [--debug] [--quiet] COMMAND …`.
 |---|---|
 | `ml validate [--task T]` | Check `config.yaml`, the vocabulary, the corrections, the screening register and the given tasks. Writes nothing. Inside a task folder, also checks that task. |
 | `ml check-catalog` | Compare the site's sources' columns with the catalog. Writes `catalog_report.html`, `catalog_manifest.json` and `new_parameters.csv` into `<catalog folder>/<site name>/`. |
-| `ml build` | Build the site's batch table. Writes `batch_data.xlsx`, `batch_data.parquet`, `build_report.html`, `missingness_report.html`, `missingness.xlsx`, `correlation_report.html`, `shifts_report.html`, `shifts.xlsx` and `batch_table_manifest.json` into `<batch table folder>/<site name>/`. |
-| `ml screening add PROPOSAL [--author NAME] [--new]` | Check a proposal (written by the missingness or correlation report, or by hand) against the site's latest build and add its decisions to the screening register. Every row is about the site or `all`. `--author` fills an empty `Author` column. `--new` starts the register when there is none. |
+| `ml build` | Build the site's batch table. Writes `batch_data.xlsx`, `batch_data.parquet`, `build_report.html`, `identifiers_report.html`, `missingness_report.html`, `missingness.xlsx`, `correlation_report.html`, `shifts_report.html`, `shifts.xlsx` and `batch_table_manifest.json` into `<batch table folder>/<site name>/`. |
+| `ml screening add PROPOSAL [--author NAME] [--new]` | Check a proposal (written by the identifiers, missingness or correlation report, or by hand) against the site's latest build and add its decisions to the screening register. Every row is about the site or `all`. `--author` fills an empty `Author` column. `--new` starts the register when there is none. |
 | `ml screening status` | List what the register excludes today at the site (per report), the conflicts there, and the decisions the site's latest build gives a reason to look at again. |
 | `ml screening reset --yes` | Start the register over, empty, for both sites. The old one is kept next to it, renamed `<name>_before_reset_<date>.xlsx`. |
 | `ml task new FOLDER [--target COL] [--question TEXT] [--force] [--exclude-shifting]` | Create a task folder with an annotated `task.yaml` and its `task_catalog.xlsx` (the catalog rows of the parameters the task can use as input features). It lists what the screening register excludes under `predictors.exclude`; `--exclude-shifting` also lists every parameter the latest build's `shifts.xlsx` holds, each with why. |
@@ -75,9 +75,11 @@ lv_coa:     {ph_nominal: 7.2, osmo_nominal: 300.0}
 |---|---|
 | `site` | Required. The key (`a` or `b`) of the site everything is about. Its outputs go into a folder named after it, next to `sharepoint.batch_table` and `sharepoint.catalog`; its tasks read only its batch table and its screening decisions. |
 | `sharepoint.<input>` | Where each input is: `path`, `drive_id`, optional `sheet`. Values come from `.env` as `${NAME}`. `screening` is optional: without it, no parameter is screened out. `batch_table` names the file; each site's is in `<its folder>/<site name>/`. |
-| `build.date_column` | The vocabulary key of the date that orders batches in the missingness, correlation and shifts reports. |
-| `build.missingness_cohort` | Which batches the missingness report describes (the correlation and shifts reports compare the analysed ones): those whose `column` holds `value` (vocabulary keys, case ignored), or every batch when the site is in `all_batches_at` (site keys), so one config serves both sites. Leave it out to describe every batch. |
+| `build.date_column` | The vocabulary key of the date that orders batches in the identifiers, missingness, correlation and shifts reports, and that a running number rises with. |
+| `build.missingness_cohort` | Which batches the missingness report describes (the identifiers, correlation and shifts reports use the analysed ones): those whose `column` holds `value` (vocabulary keys, case ignored), or every batch when the site is in `all_batches_at` (site keys), so one config serves both sites. Leave it out to describe every batch. |
 | `build.correlation_threshold` | The \|ρ\| every pair of parameters in a correlation group must reach (complete linkage), so a group's weakest pair is never below it. Default 0.9. |
+| `build.identifier_unique` | The share of distinct values (over the batches with a value) that makes a code a *unique code*, and a whole number that rises with the date a *running number*, in the identifiers report. Default 0.95. |
+| `build.identifier_near_unique` | The share that makes a code a *near-unique code*, and sentences *free text*. At most `identifier_unique`. Default 0.5, as a task's `max_cardinality_ratio`. |
 | `build.missingness_cohort.analyse_only` | Of those, the batches the statistics and groups are computed over: `column` holds `value`. The others are drawn in the plot, their missing cells in green. A site without the column has all its batches analysed. |
 | `cleaning.censored` | What `<0.5` becomes: `limit` (0.5), `half` (0.25) or `missing`. Applies to every source, the vector certificates included. |
 | `cleaning.censored_flags` | Also add a `<column> censored` 0/1 column. |
@@ -202,10 +204,11 @@ parameter:
 | `Batch table` | tool | Digest of the batch table the decision was made on |
 | `Review by` | tool | When to look again: three months after an exclusion |
 | `Represented by` | you, or the report's suggestion | The parameter that stands in for this one; required with `correlated with group`. Registers from before this column read as before |
-| `Report` | the report's proposal, or the tool | `missingness` or `correlation`: the report the decision belongs to. Per parameter, site and report the last decision stands; a parameter is excluded when either report excludes it. Empty (registers from before this column): the report of its reason |
+| `Report` | the report's proposal, or the tool | `identifiers`, `missingness` or `correlation`: the report the decision belongs to. Per parameter, site and report the last decision stands; a parameter is excluded when any report excludes it. Empty (registers from before this column): the report of its reason |
+| `Identifier` | tool | What the identifiers report found the parameter to be (`unique code, 34 of 34 distinct`), empty when it found nothing. Registers from before this column read as before |
 
 The `Check` sheet holds the digest the register was last written with. Reasons
-decided in the missingness report: `never recorded`, `retired`, `introduced
+decided in the identifiers report: `identifier`, `free text`; in the missingness report: `never recorded`, `retired`, `introduced
 late`, `too sparse`, `irregular`, `missing with group`, `data quality`, `other`;
 in the correlation report: `correlated with group`.
 
@@ -213,7 +216,8 @@ in the correlation report: `correlated with group`.
 
 | File | Contents |
 |---|---|
-| `missingness.xlsx` | Per site and parameter: missing %, pattern, gaps, last measured, missingness group, *Correlation group* and *Suggested representative*, and every standing screening decision on it (from either report). What `ml screening add` checks a proposal against and cites as evidence. |
+| `identifiers_report.html` | Per site: the columns that name a batch rather than describe it, read first. A *unique code* or *near-unique code* (distinct values ≥ `build.identifier_unique` or `build.identifier_near_unique` of the batches with a value), a *running number* (whole, distinct, \|ρ\| ≥ 0.95 with the date) or *free text* (median of 3 words or more). Columns need 20 values; the batch key and dates take no part. Every column is judged whatever the register says; the register is shown alongside. |
+| `missingness.xlsx` | Per site and parameter: missing %, pattern, gaps, last measured, missingness group, what the identifiers report found it to be (*Identifier*), *Correlation group* and *Suggested representative*, and every standing screening decision on it (from every report). What `ml screening add` checks a proposal against and cites as evidence. |
 | `correlation_report.html` | Per site: numerical parameters grouped by Spearman \|ρ\| (complete linkage: every pair ≥ `build.correlation_threshold`, default 0.9; pairs need 20 shared batches), each group with a suggested representative, the best usable one, and BH-adjusted q. Every parameter takes part whatever the register says; the register is shown alongside. |
 | `shifts_report.html` | Per manufacturing site (the `Manufacturing Site` column): parameters whose exact value runs in groups over time, dates by the day (groups ≥ 2 days with a value on average, permutation p ≤ 0.01; pairs need 20 shared batches), grouped by the days they change (complete linkage: every pair shares ≥ 0.8 of its change days). Takes no part in screening. |
 | `shifts.xlsx` | Every parameter that runs in groups over time, grouped or not, one row per manufacturing site and parameter, and when it was built: what `ml task new --exclude-shifting` lists. |

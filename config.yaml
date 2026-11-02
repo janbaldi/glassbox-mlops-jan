@@ -69,6 +69,8 @@ build:
   date_column: "date_start"   # vocabulary key of the date that orders the batches for the
                                  # report's missingness patterns (introduced late, retired, …)
   correlation_threshold: 0.9       # |ρ| every pair in a correlation group reaches (default 0.9)
+  identifier_unique: 0.95          # share of distinct values that makes a code an identifier
+  identifier_near_unique: 0.5      # ... a near-unique code (as a task's max_cardinality_ratio)
   missingness_cohort:              # the batches the missingness report describes
     column: batch_type             # vocabulary key of the column to select by
     value: type_commercial         # vocabulary key of the value to keep

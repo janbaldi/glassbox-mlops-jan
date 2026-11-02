@@ -1,8 +1,9 @@
 # 3. Screening parameters
 
-Some parameters are not fit to predict with: a site never records them, they
-were retired, or they are recorded so irregularly that a model would learn the
-gaps. Others are redundant: they rank the batches as another parameter does
+Some parameters are not fit to predict with: they name a batch rather than
+describe it (a patient code, a running number, a comment; the identifiers
+report), a site never records them, they were retired, or they are recorded so
+irregularly that a model would learn the gaps. Others are redundant: they rank the batches as another parameter does
 (the correlation report). **Screening** leaves such a parameter out of every
 task, with the reason written down (and, for a redundant one, the parameter that
 represents it), until you decide otherwise. Parameters that run in groups over
@@ -26,12 +27,13 @@ every task.
   one register, but everything is about the site `config.yaml`'s `site:` names:
   its build, reports, `ml screening status` and tasks see only the decisions at
   that site and at `all`, and a proposal is about that site (or `all`) only.
-- **Two reports, two tracks.** Each row records the report it was made from in
-  its `Report` column: `missingness` (every reason but one) or `correlation`
-  (`correlated with group`). Today's state is the log read from top to bottom:
-  per parameter, site **and report**, the last decision stands. So a parameter
-  can be excluded in both reports at once, and reinstating it in one leaves the
-  other's exclusion standing. A parameter is out when either report excludes it.
+- **Three reports, three tracks.** Each row records the report it was made from
+  in its `Report` column: `identifiers` (`identifier`, `free text`),
+  `missingness` (every other reason but one) or `correlation` (`correlated with
+  group`). Today's state is the log read from top to bottom: per parameter, site
+  **and report**, the last decision stands. So a parameter can be excluded in
+  several reports at once, and reinstating it in one leaves the others'
+  exclusions standing. A parameter is out when any report excludes it.
 - **Every task applies it.** When a task picks its predictors, it leaves out
   every parameter the register excludes at the task's site. `ml task new` also
   lists them in the new `task.yaml` under `predictors.exclude`, so the task file
@@ -41,13 +43,14 @@ every task.
   and `inputs/screening.xlsx` is a copy of that register. `ml task rerun` applies
   the copy, so a rerun applies exactly the same decisions however the register
   has changed since.
-- **Every build shows it, and is not steered by it.** The missingness and
-  correlation reports each analyse every parameter, whatever the register says:
-  neither depends on the other's decisions. Both show the whole register. ⊘ marks
-  what the report itself excluded (listed under *Screened out at this site*,
-  where you can reinstate it), ◇ what the other report excluded (listed under
-  *Screened out by the … report*, read only), and the *Screening* / *Register*
-  column spells out every decision on a parameter, and what it represents. Each
+- **Every build shows it, and is not steered by it.** The identifiers,
+  missingness and correlation reports each analyse every parameter, whatever the
+  register says: none depends on the others' decisions. All three show the whole
+  register. ⊘ marks what the report itself excluded (listed under *Screened out
+  at this site*, where you can reinstate it), ◇ what another report excluded
+  (listed under *Screened out by the other reports*, read only), and the
+  *Screening* / *Register* column spells out every decision on a parameter, and
+  what it represents. Each
   report's lead names the register it shows (rows, last decision), or says why
   none could be read; the build log counts the site's exclusions per report and
   warns about decisions on parameters the batch table does not have. The build
@@ -66,12 +69,15 @@ every task.
 
 ## Deciding: what to look at
 
-Open the latest `missingness_report.html` and `correlation_report.html`
-([chapter 2](02-monthly-update.md#5-read-the-missingness-report)).
+Open the latest `identifiers_report.html`, then `missingness_report.html` and
+`correlation_report.html`
+([chapter 2](02-monthly-update.md#5-read-the-identifiers-report)).
 Good candidates for screening:
 
 | What you see | Reason to record |
 |---|---|
+| A *unique code*, *near-unique code* or *running number* in the identifiers report | `identifier` |
+| *Free text* in the identifiers report | `free text` |
 | *Retired*, with no value in the latest batches | `retired` |
 | *Introduced late*, with too little history yet | `introduced late` |
 | Mostly missing, or a value in too few batches to learn from | `too sparse` |
@@ -92,8 +98,8 @@ check it in the other site's reports after its next build.
 
 ## Recording a decision
 
-**1. Write the proposal from the report.** In the report (`missingness_report.html`
-or `correlation_report.html`) of the site, tick, with the box at the
+**1. Write the proposal from the report.** In the report (`identifiers_report.html`,
+`missingness_report.html` or `correlation_report.html`) of the site, tick, with the box at the
 start of a row, what the decision is about: groups in the group table,
 parameters in the parameter table, or (to reinstate them) rows of *Screened out
 at this site*. You can tick rows in several tables at once. Clicking a row
@@ -119,14 +125,16 @@ exclude,D3 clumps present,Missing 05,Northfield,missing with group,clump observa
 
 Each report offers only its own reasons, and can only reinstate what it screened
 out itself at that site; the form says which ticked ones it leaves out, and why.
-To reinstate a parameter the other report excluded, do it in that report.
+To reinstate a parameter another report excluded, do it in that report. The
+identifiers report sets the reason from what you ticked: `free text` for free
+text, `identifier` for the rest.
 
 From the correlation report, each ticked group becomes an exclusion of every member
 but its representative, with the representative in the `Represented by` column.
 The group table's *Best usable representative* is the best-scoring member the
 missingness report leaves in (`= suggested` when that is the suggestion): pick
-it when the suggestion is excluded there. The form refuses a representative the
-missingness report excludes. **To move a group to another representative**, tick
+it when the suggestion is excluded there. The form refuses a representative
+another report excludes. **To move a group to another representative**, tick
 the group and pick the new one: the proposal reinstates it (if this report
 excluded it) and excludes the others, represented by it, in one go.
 
@@ -142,7 +150,7 @@ You can also write the file by hand, in Excel or a text editor:
 | `Rationale` | Why, in a sentence. Optional |
 | `Author` | Who decides; or leave it empty and pass `--author` |
 | `Represented by` | The parameter that stands in for the excluded ones; it must stay usable at the site. Required with `correlated with group`: left empty, it is the report's suggestion for the group |
-| `Report` | `missingness` or `correlation`: the report the decision belongs to. Left empty, the report of its reason |
+| `Report` | `identifiers`, `missingness` or `correlation`: the report the decision belongs to. Left empty, the report of its reason |
 
 **2. Add it.**
 
@@ -174,8 +182,9 @@ reason, rationale and author share one ID: they are one decision.
 A group is stored as its members, because group numbers can change with the next
 build and the members are what was decided. The tool fills in the date,
 the author, the evidence from the latest build (missing %, pattern, last
-measurement, and the digest of the batch table it was decided on) and, for an
-exclusion, a review date three months on.
+measurement, what the identifiers report found it to be, and the digest of the
+batch table it was decided on) and, for an exclusion, a review date three months
+on.
 
 The first time, there is no register yet: add `--new` to start one.
 
@@ -206,7 +215,7 @@ column, and the next task run lists the parameters as excluded:
 ## Changing your mind
 
 When new months of data come in, `ml screening status` lists the decisions the
-new build questions ([chapter 2, step 6](02-monthly-update.md#6-check-the-standing-decisions)).
+new build questions ([chapter 2, step 7](02-monthly-update.md#7-check-the-standing-decisions)).
 For each one, decide:
 
 - **Reinstate it:** a proposal row with `Action: reinstate`, the same parameter
@@ -226,8 +235,10 @@ records that in its manifest.
 - **Decide on the commercial cohort** the build's reports describe, not on a
   single task's cohort, so the decision holds for every task.
 - **The reports stand on their own,** so you can work through them in any
-  order. Missingness first is still the natural one: the correlation report then
-  shows those decisions as ◇, and its *Best usable representative* skips them.
+  order. Identifiers first, then missingness, is still the natural one: what names
+  a batch is settled before you look at how it goes missing, and the correlation
+  report then shows those decisions as ◇, and its *Best usable representative*
+  skips them.
 - **Check the representative.** The suggestion is the member that carries most
   of the others' information; prefer a parameter you can explain, or that a
   task needs, if it is nearly as good.
@@ -236,7 +247,7 @@ records that in its manifest.
 - **Let the review dates work.** Every exclusion is due for review three months
   on, and `ml screening status` lists it then; reinstate an *introduced late*
   parameter sooner if it gains history.
-- **Review the status every month** (checklist step 6), even when nothing seems
+- **Review the status every month** (checklist step 7), even when nothing seems
   to have changed.
 - **When a task must use a screened parameter** for a specific question, it can't
   override the register: reinstate the parameter, with the reason, or ask the

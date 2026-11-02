@@ -52,6 +52,7 @@ from . import (
     decorrelate,
     enrich,
     features,
+    identifiers,
     io,
     manifest,
     merge,
@@ -108,6 +109,7 @@ CATALOG_OUTPUTS = {
 }
 BUILD_OUTPUTS = {
     "report": "build_report.html",
+    "identifiers report": "identifiers_report.html",
     "missingness report": "missingness_report.html",
     "missingness table": screening.EVIDENCE_FILE,
     "correlation report": "correlation_report.html",
@@ -489,11 +491,27 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
     merge_report.never_recorded = never_recorded
     origins["Merge"] = ["Site Merged"]
     # Keyed by the site, as every report and the evidence workbook are.
-    missing_by_site, cohorts = {}, {}
+    cohorts, described = {}, {}
     for site in (the_site,):
         batches, cohort = _missingness_cohort(result, site, config)
         analysed, counted = _analysed_batches(batches, site, config)
         cohorts[site] = batches, analysed
+        described[site] = "; ".join(filter(None, (cohort, counted)))
+    # First what names a batch rather than describes it, then how the rest goes missing.
+    identified_by_site = {}
+    for site, (batches, analysed) in cohorts.items():
+        rows, analysis = identifiers.for_build(
+            batches,
+            catalog_mapping,
+            id_column="Patient Lot/Batch #",
+            order_column=names.col(date_column),
+            analysed=analysed,
+            **_identifier_thresholds(config),
+        )
+        analysis.cohort = described[site]
+        identified_by_site[site] = rows, analysis
+    missing_by_site = {}
+    for site, (batches, analysed) in cohorts.items():
         missing_by_site[site] = missingness.for_build(
             batches,
             catalog_mapping,
@@ -501,7 +519,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
             order_column=names.col(date_column),
             analysed=analysed,
         )
-        missing_by_site[site][1].cohort = "; ".join(filter(None, (cohort, counted)))
+        missing_by_site[site][1].cohort = described[site]
     # Over the same batches, every parameter: the register is shown, never used to pick.
     correlated_by_site = {}
     for site, (batches, analysed) in cohorts.items():
@@ -520,7 +538,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
     shifted_by_site = _shifts_by_plant(cohorts, names.col(date_column))
     register, register_note = _read_register(the_site, list(result.columns), config)
     decisions = screening.for_site(register.decisions, the_site) if register else []
-    _show_register(decisions, the_site, missing_by_site, correlated_by_site)
+    _show_register(decisions, the_site, missing_by_site, correlated_by_site, identified_by_site)
 
     # ── Write ──────────────────────────────────────────────────────────────
     log.section("06 · Output")
@@ -557,6 +575,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
             cleaning=cleaning_report,
             features=feature_reports,
             merge=merge_report,
+            identifiers=identified_by_site,
             missingness=missing_by_site,
             correlation=correlated_by_site,
             shifts=shifted_by_site,
@@ -587,8 +606,14 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
                 },
                 content_digest,
                 run_start,
+                identified_by_site,
             )
             files["missingness table"] = evidence
+        identifiers_report = staged / BUILD_OUTPUTS["identifiers report"]
+        with _preparing("the identifiers report", identifiers_report, folder):
+            files["identifiers report"] = report.write(
+                report.build_identifiers_payload(build_run), identifiers_report
+            )
         missing_report = staged / BUILD_OUTPUTS["missingness report"]
         with _preparing("the missingness report", missing_report, folder):
             files["missingness report"] = report.write(
@@ -652,6 +677,15 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
     )
     log.summary(mark)
     return dict(uploaded)["report"]
+
+
+def _identifier_thresholds(config: dict[str, Any]) -> dict[str, float]:
+    """The shares of distinct values that make a code unique or near-unique to a batch."""
+    build = config.get("build") or {}
+    return {
+        "unique": float(build.get("identifier_unique", identifiers.UNIQUE)),
+        "near_unique": float(build.get("identifier_near_unique", identifiers.NEAR_UNIQUE)),
+    }
 
 
 def _shifts_by_plant(
@@ -777,11 +811,13 @@ def _show_register(
     site: str,
     missing_by_site: dict[str, tuple],
     correlated_by_site: dict[str, tuple],
+    identified_by_site: dict[str, tuple] | None = None,
 ) -> None:
-    """Mark every parameter with what the register holds on it at ``site``, in both reports.
+    """Mark every parameter with what the register holds on it at ``site``, in every report
+    that screens.
 
     Each report lists its own decisions (``screened``: what it can reinstate) and the
-    other report's (``elsewhere``), and the conflicts.
+    other reports' (``elsewhere``), and the conflicts.
     """
     sites = (site,)
     out = screening.standing(decisions, sites)
@@ -790,6 +826,7 @@ def _show_register(
     for conflict in found:
         log.warn(MODULE, "Screening conflict: " + screening.conflict_line(conflict))
     for results, track, column in (
+        (identified_by_site or {}, screening.IDENTIFIERS, "Register"),
         (missing_by_site, screening.MISSINGNESS, "Screening"),
         (correlated_by_site, screening.CORRELATION, "Register"),
     ):
@@ -806,14 +843,22 @@ def _write_evidence(
     grouped_by_site: dict[tuple[str, str], dict[str, list]],
     content_digest: str,
     run_start: datetime,
+    identified_by_site: dict[str, tuple] | None = None,
 ) -> Path:
-    """Each parameter's missingness, and its correlation and shift group with their suggested
-    representative: what `ml screening add` cites. ``grouped_by_site`` maps the two evidence
-    columns to the groups per site that fill them. A parameter in several groups at a
-    site (one per plant) has them all, joined by "; ", each suggestion in its place."""
+    """Each parameter's missingness, what the identifiers report found it to be, and its
+    correlation group with its suggested representative: what `ml screening add` cites.
+    ``grouped_by_site`` maps the two evidence columns to the groups per site that fill
+    them. A parameter in several groups at a site has them all, joined by "; ", each
+    suggestion in its place."""
     cited = {}
     for site, (rows, _) in missing_by_site.items():
-        cited[site] = [dict(row) for row in rows]
+        found = {
+            row["Parameter"]: identifiers.evidence(row)
+            for row in (identified_by_site or {}).get(site, ([], None))[0]
+        }
+        cited[site] = [
+            dict(row, **{screening.IDENTIFIER: found.get(row["Parameter"], "")}) for row in rows
+        ]
         for (group_column, suggested_column), groups in grouped_by_site.items():
             for row in cited[site]:
                 found = [g for g in groups.get(site, []) if row["Parameter"] in g.members]
@@ -1630,7 +1675,8 @@ def validate(config: dict[str, Any] | None, specs: list[TaskSpec]) -> list[str]:
 def _missingness_cohort(
     batches: pd.DataFrame, site: str, config: dict[str, Any]
 ) -> tuple[pd.DataFrame, str]:
-    """The site's batches the missingness, correlation and shifts reports describe, and how.
+    """The site's batches the identifiers, missingness, correlation and shifts reports describe,
+    and how.
 
     ``build.missingness_cohort`` keeps the batches whose ``column`` holds ``value``
     (both vocabulary keys; compared without case or surrounding spaces), except at
