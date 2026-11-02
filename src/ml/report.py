@@ -11,8 +11,9 @@ Each stage answers the question it is for. The catalog report: what do the sourc
 record that the schema has never been told about. The build report: what came
 out, what the data needed doing to it, where every parameter came from, and which
 catalog parameters the batch table still does not have. The build's identifiers,
-missingness, correlation and shifts reports: which parameters name a batch rather
-than describe it, go missing together, rank the batches alike, or run in groups
+dates, missingness, correlation and shifts reports: which parameters name a batch
+rather than describe it, in what order a batch's dates fall and how the batches
+cluster by their timing, which go missing together, rank the batches alike, or run in groups
 over time, and what to screen.
 The tasks report: which batches are in the cohort, what each parameter became,
 and what every column of the dataset means.
@@ -25,10 +26,21 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import yaml
 
-from . import correlation, decorrelate, identifiers, missingness, plots, screening, shifts, stlite
+from . import (
+    correlation,
+    dates,
+    decorrelate,
+    identifiers,
+    missingness,
+    plots,
+    screening,
+    shifts,
+    stlite,
+)
 from .blocks import (
     Block,
     bold,
@@ -40,6 +52,7 @@ from .blocks import (
     deferred,
     download,
     esc,
+    facts,
     md,
     missing_viewer,
     num,
@@ -78,6 +91,8 @@ class BuildRun:
     run_start: datetime = field(default_factory=datetime.now)
     #: site → :func:`ml.identifiers.for_build` over its batches: one row per column found
     identifiers: dict[str, tuple[list[dict], Any]] = field(default_factory=dict)
+    #: site → :func:`ml.dates.for_build` over its batches: one row per date column
+    dates: dict[str, tuple[list[dict], Any]] = field(default_factory=dict)
     #: site → :func:`ml.missingness.for_build` over its batches: one row per column, the groups
     missingness: dict[str, tuple[list[dict], Any]] = field(default_factory=dict)
     #: site → :func:`ml.correlation.for_build` over the same batches
@@ -630,6 +645,220 @@ def _identifiers_help(run: BuildRun) -> dict | None:
                 "Any other number describes the batch, however many values it has.\n"
                 "- A column with one value is not reported. *Most batches with one value* "
                 "shows how far a code is from naming a single batch."
+            ),
+        ],
+    }
+
+
+#: The dates report's tables, with their display formats.
+_DATE_FORMATS = {
+    "Position": "%d",
+    "Batches with a value": "%d",
+    "Coverage %": "%.1f",
+    "Median hours from anchor": "%.1f",
+    "Hours P25": "%.1f",
+    "Hours P75": "%.1f",
+    "Out of order %": "%.1f",
+    "Weekend %": "%.1f",
+    "Drift ρ": "%+.2f",
+    "Drift p": "%.2g",
+    "Batches with both": "%d",
+    "Median hours": "%.1f",
+    "Shortest": "%.1f",
+    "Longest": "%.1f",
+    "Negative %": "%.1f",
+    "Batches": "%d",
+    "Median span (hours)": "%.1f",
+    "Silhouette": "%.2f",
+}
+
+
+def _date_table(rows: list[dict], note: str = "") -> Block | None:
+    if not rows:
+        return None
+    headers = list(rows[0])
+    return sortable(
+        headers,
+        [[row[h] for h in headers] for row in rows],
+        [_DATE_FORMATS.get(h) for h in headers],
+        note=note,
+    )
+
+
+def _date_sections(site: str, rows: list[dict], analysis: Any, many: bool) -> list[dict | None]:
+    """One site's sections of the dates report."""
+    tag = f"{site}: " if many else ""
+    slug = site.lower().replace(" ", "-") if many else ""
+    clusters = [
+        {
+            "Cluster": c.name,
+            "Batches": c.batches,
+            "First": c.first,
+            "Last": c.last,
+            "Median span (hours)": c.span,
+            "Silhouette": c.silhouette,
+            "What sets it apart": "; ".join(c.apart) or "no single step",
+        }
+        for c in analysis.clusters
+    ]
+    weekdays = [
+        {"Cluster": name, **dict(zip(dates.WEEKDAYS, counts))}
+        for name, counts in analysis.weekdays.items()
+    ]
+    gaps = analysis.gaps
+    return [
+        _section(
+            f"findings{slug}",
+            f"{tag}What the dates say",
+            [md("\n".join(f"- {line}" for line in analysis.findings))],
+        ),
+        _section(
+            f"clusters{slug}",
+            f"{tag}Timing clusters",
+            [
+                plots.timing_profiles(analysis),
+                plots.timing_calendar(analysis),
+                _date_table(
+                    clusters,
+                    "Each cluster: its batches, when they ran, the median hours from anchor to "
+                    "last timepoint, how well its batches fit it (silhouette, -1 to 1), and the "
+                    "steps that set it apart from the other batches.",
+                ),
+                _date_table(
+                    weekdays,
+                    "Batches per weekday of their anchor date, by cluster"
+                    + (
+                        f" (χ² p = {analysis.weekdays_p:.3g})."
+                        if analysis.weekdays_p is not None
+                        else "."
+                    ),
+                ),
+            ]
+            if analysis.clusters
+            else [md(f"No timing clusters: {analysis.unclustered or 'nothing to cluster'}.")],
+        ),
+        _section(
+            f"order{slug}",
+            f"{tag}The order of the date columns",
+            [
+                plots.timing_order(analysis),
+                _date_table(
+                    rows,
+                    "Every date column, the ones on the timeline in their sorted order "
+                    "(*Position*). Hours are from the anchor. *Out of order* is the share of "
+                    "batches where it comes before the column sorted before it; *Drift* is "
+                    "Spearman's ρ of its hours from the anchor with the anchor date.",
+                ),
+            ],
+        ),
+        _section(
+            f"steps{slug}",
+            f"{tag}Steps between the columns",
+            [
+                _date_table(
+                    dates.step_rows(analysis),
+                    "A step is two columns next to each other in the sorted order; its duration "
+                    "is the hours between them. *Clustered on*: the steps the timing clusters "
+                    "are made of.",
+                ),
+                plots.step_calendar(analysis),
+            ],
+        ),
+        _section(
+            f"relations{slug}",
+            f"{tag}How the batches relate in time",
+            [
+                plots.in_progress(analysis),
+                facts(
+                    [
+                        ["Batches described", f"{len(analysis.batches):,}"],
+                        [
+                            "Batches in progress at once",
+                            f"up to {max(analysis.progress)}, median "
+                            f"{float(np.median([p for p in analysis.progress if p])):.0f} on "
+                            "days with any"
+                            if analysis.progress and any(analysis.progress)
+                            else "—",
+                        ],
+                        [
+                            "Days between consecutive starts",
+                            f"median {np.median(gaps):.1f}, longest {max(gaps):.1f}"
+                            if gaps
+                            else "—",
+                        ],
+                        ["Starts on the same day as the one before", f"{sum(g < 1 for g in gaps)}"],
+                        [
+                            "Runs of one cluster in date order",
+                            f"{analysis.runs}, where shuffles give {analysis.runs_expected} "
+                            f"(p = {analysis.runs_p:.3g})"
+                            if analysis.runs is not None
+                            else "—",
+                        ],
+                    ]
+                ),
+            ],
+        ),
+    ]
+
+
+def _dates_help(run: BuildRun) -> dict | None:
+    if not run.dates:
+        return None
+    return {
+        "title": "Method",
+        "blocks": [
+            md(
+                "#### Reading the report\n\n"
+                "The report is about one site (config.yaml's site:) and describes its date "
+                "columns: in what order a batch's timepoints fall, how long each step between "
+                "them takes, and whether the batches fall into groups run to a different "
+                "timing. *What the dates say* puts the findings in words. Hover any mark for its "
+                "batch; click a legend entry to hide a cluster, double-click to show it alone.\n\n"
+                "#### Dates are not predictors\n\n"
+                "A model fitted on a date learns when a batch was made, and says nothing about "
+                "a batch made later. `ml task new` leaves every date column out of a new task, "
+                "listed under `predictors.exclude` with why (`--keep-dates` keeps them). The "
+                "durations the build derives from the dates are numbers, and stay usable."
+            ),
+            md("#### The kinds of date columns"),
+            table(
+                ["Kind", "Meaning"],
+                [[esc(kind), meaning] for kind, meaning in dates.KINDS.items()],
+            ),
+            md(
+                "#### How the numbers are decided\n\n"
+                "The site is analysed on the batches the missingness report counts in its "
+                "statistics. A date column is one the catalog types *datetime*, or whose values "
+                "are dates; the batch key is not one.\n\n"
+                "- **Anchor.** Each batch's timepoints are read as hours from its anchor: the "
+                "date the batches are ordered by (`build.date_column`), or the batch's first "
+                "timepoint.\n"
+                f"- **Order.** Columns with {dates.MIN_VALUES} values or more on the timeline are "
+                "sorted by their median hours from the anchor. *Out of order*: the share of "
+                "batches with both where a column comes before the one sorted before it. *Same "
+                f"as*: equal to another column in {dates.SAME:.0%} of the batches with both. "
+                "*Drift*: Spearman's ρ of the hours from the anchor (or a step's duration) with "
+                f"the anchor date; named when p < {dates.P_MAX} and |ρ| ≥ 0.3.\n"
+                "- **Steps.** Two columns next to each other in the sorted order; the duration "
+                "is the hours between them in each batch with both.\n"
+                "- **Timing clusters.** The steps with a value in at least "
+                f"{dates.MIN_SHARE:.0%} of the batches, and the batches with at least "
+                f"{dates.MIN_SHARE:.0%} of those steps. Each duration is measured as its "
+                "deviation from the step's median, in median lengths of the step (at least "
+                f"{dates.FLOOR_HOURS:g} hours; cut at ±{dates.CLIP:g}): a day late is much in a "
+                "three-day step and little in a two-month one. A missing one counts as the "
+                "median. Ward's hierarchical clustering joins the batches, and the number of "
+                f"clusters, 2 to {dates.MAX_CLUSTERS}, is the one with the highest mean "
+                f"silhouette; below {dates.WEAK} the clusters are weak (the timing varies more "
+                "than it groups). *Timing 1* is the cluster with the earliest median anchor "
+                "date. A step *sets a cluster apart* when the cluster's median differs from the "
+                f"other batches' by {dates.APART:.0%} of the step's length or more.\n"
+                "- **Eras or interleaved.** The runs of one cluster in anchor-date order, against "
+                f"{dates.PERMUTATIONS} shuffles: fewer runs than chance (p < {dates.P_MAX}) means "
+                "the clusters follow one another in time.\n"
+                "- **Weekday.** A χ² test of cluster against the weekday of the anchor date.\n"
+                "- **In progress.** A batch is in progress from its anchor date to the day of its "
+                "last timepoint."
             ),
         ],
     }
@@ -1206,6 +1435,36 @@ def build_identifiers_payload(run: BuildRun) -> dict[str, Any]:
         + run.register_note,
         _identifiers_help(run),
     )
+
+
+def build_dates_payload(run: BuildRun) -> dict[str, Any]:
+    """The build's dates report: the order of the date columns, the steps between them, and
+    how the batches cluster by their timing."""
+    many = len(run.dates) > 1
+    sections = [
+        section
+        for site, (rows, analysis) in run.dates.items()
+        for section in _date_sections(site, rows, analysis, many)
+    ] + [_provenance(run)]
+    found = "; ".join(
+        f"{site}: {len(a.kinds)} date columns, {len(a.order)} on the timeline, "
+        + (f"{len(a.clusters)} timing clusters" if a.clusters else "no timing clusters")
+        for site, (_, a) in run.dates.items()
+    )
+    cohorts = [f"{site}: {a.cohort}" for site, (_, a) in run.dates.items() if a.cohort]
+    return {
+        "title": "Batch table dates",
+        "lead": "In what order each batch's dates fall, how long the steps between them take, "
+        f"and how {' and '.join(run.merge.site_rows)}'s batches cluster by their timing. "
+        "`ml task new` leaves every date column out of a new task. "
+        + (found or "No date columns")
+        + "."
+        + (" Batches described — " + "; ".join(cohorts) + "." if cohorts else ""),
+        "subtitle": f"CAR-T manufacturing data · run {run.run_start.strftime('%Y-%m-%d %H:%M')}",
+        "sections": [section for section in sections if section],
+        "help": _dates_help(run),
+        "compact": True,
+    }
 
 
 def build_missingness_payload(run: BuildRun) -> dict[str, Any]:

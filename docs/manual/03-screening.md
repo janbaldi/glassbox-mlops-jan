@@ -219,7 +219,7 @@ column, and the next task run lists the parameters as excluded:
 ## Changing your mind
 
 When new months of data come in, `ml screening status` lists the decisions the
-new build questions ([chapter 2, step 7](02-monthly-update.md#7-check-the-standing-decisions)).
+new build questions ([chapter 2, step 8](02-monthly-update.md#8-check-the-standing-decisions)).
 For each one, decide:
 
 - **Reinstate it:** a proposal row with `Action: reinstate`, the same parameter
@@ -251,7 +251,7 @@ records that in its manifest.
 - **Let the review dates work.** Every exclusion is due for review three months
   on, and `ml screening status` lists it then; reinstate an *introduced late*
   parameter sooner if it gains history.
-- **Review the status every month** (checklist step 7), even when nothing seems
+- **Review the status every month** (checklist step 8), even when nothing seems
   to have changed.
 - **When a task must use a screened parameter** for a specific question, it can't
   override the register: reinstate the parameter, with the reason, or ask the

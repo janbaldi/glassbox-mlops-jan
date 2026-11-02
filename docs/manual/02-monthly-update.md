@@ -13,12 +13,13 @@ through it again. Each site's outputs go into a folder named after it.
 
 1. `ml validate`: the setup still works.
 2. `ml check-catalog`: the sources record nothing the catalog doesn't know about, or you add it.
-3. `ml build`: the batch table, the build report, and the identifiers, missingness, correlation and shifts reports.
+3. `ml build`: the batch table, the build report, and the identifiers, dates, missingness, correlation and shifts reports.
 4. Read the build report.
 5. Read the identifiers report: decide on the possible identifiers, and screen out the ones no task should use ([chapter 3](03-screening.md)).
-6. Read the missingness report, then the correlation and shifts reports, and record any screening decision.
-7. `ml screening status`: no standing decision is contradicted by the new data.
-8. Rerun the tasks you maintain ([chapter 4](04-tasks.md)).
+6. Read the dates report: the order of each batch's dates, and how the batches cluster by their timing.
+7. Read the missingness report, then the correlation and shifts reports, and record any screening decision.
+8. `ml screening status`: no standing decision is contradicted by the new data.
+9. Rerun the tasks you maintain ([chapter 4](04-tasks.md)).
 
 Run every command from the repository (or any folder below it), as `uv run ml …`.
 The *Monthly update* route of [the workflow map](../workflow.html) shows these
@@ -68,6 +69,8 @@ Written to SharePoint — 40 batches × 227 columns
   missingness table      missingness.xlsx
   identifiers report     identifiers_report.html
   identifiers table      identifiers.xlsx
+  dates report           dates_report.html
+  dates table            dates.xlsx
   missingness report     missingness_report.html
   correlation report     correlation_report.html
   shifts report          shifts_report.html
@@ -158,7 +161,50 @@ reports* work as in the missingness report; *Not judged* (collapsed) lists the
 columns that take no part, and why. `identifiers.xlsx` in the same folder holds
 every row, which `ml task new` reads.
 
-## 6. Read the missingness report
+## 6. Read the dates report
+
+Open `dates_report.html`. It is about the site's **date and time columns**: in what
+order each batch's timepoints fall, how long the steps between them take, and
+whether the batches fall into groups that were run to a different timing. It
+describes the same batches as the missingness report. Nothing here needs a decision:
+`ml task new` leaves every date column out of a new task anyway (a model fitted on a
+date learns when a batch was made; [chapter 4](04-tasks.md#1-create-a-task)). The
+durations the build derives from the dates are numbers, and stay usable. Read it for
+what the timing says about the process.
+
+**What the dates say** puts every finding in a sentence. Then:
+
+- **Timing clusters.** The batches clustered on the durations of their steps (see
+  below), each cluster with what sets it apart (*feed → harvest 86 h, against 48 h
+  in the other batches*). *Each batch's timeline* draws every batch through its
+  timepoints, one thin line each, with each cluster's median in bold: where the bold
+  lines part, the clusters differ. *When each timing cluster ran* puts each batch on
+  the calendar, one lane per cluster: lanes that follow one another are **eras** (the
+  timing changed: a new procedure, a process change), lanes side by side are
+  day-to-day variation. The findings say which, with a runs test, and whether the
+  weekday a batch starts on goes with its cluster (a weekend inside the process
+  lengthens the step it falls on). A cluster no step sets apart by 10% of its length
+  is not reported: then the batches run to one timing.
+- **The order of the date columns.** The columns sorted by their median time after
+  the batch's anchor (`build.date_column`), with a heatmap of how often each comes
+  before each other: a light cell above the diagonal is a pair that swaps places in
+  some batches, a recording error or a step done in a different order. The table
+  gives per column its kind (date and time, date only, or time of day only, which
+  cannot be placed on a timeline), its spread, *Out of order*, *Same as* another
+  column, the share on a weekend, its time of day and its drift over the months.
+- **Steps between the columns.** A step is two columns next to each other in that
+  order. Its duration's median and spread, how often it is negative, and whether it
+  lengthens or shortens over the months, with one small plot per step over the
+  calendar.
+- **How the batches relate in time.** Batches in progress at once, the days between
+  consecutive starts.
+
+A date shared by batches started weeks apart (a vector's manufacture date) is the
+date of a lot or a material, not of the batch: it is told as its age at the anchor,
+and kept out of the steps and the clusters. `dates.xlsx` holds every date column,
+every step, and each batch's cluster.
+
+## 7. Read the missingness report
 
 Open `missingness_report.html`. It describes **commercial batches only**: at
 Ghent the batches whose `Type` is `Commercial`, at Raritan every batch. Of those,
@@ -308,7 +354,7 @@ tick. To leave all of them out of a task, the grouped ones too, create it with
 `shifts.xlsx`. One the register already screens out is listed once, as
 screened.
 
-## 7. Check the standing decisions
+## 8. Check the standing decisions
 
 ```bash
 uv run ml screening status
@@ -333,7 +379,7 @@ its review date has passed, or when the identifiers report no longer finds a
 parameter it screened out. Nothing changes until you
 decide: see [Changing your mind](03-screening.md#changing-your-mind).
 
-## 8. Rerun your tasks
+## 9. Rerun your tasks
 
 ```bash
 uv run ml task run --task tasks/expression

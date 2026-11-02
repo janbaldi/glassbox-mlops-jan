@@ -49,6 +49,7 @@ from . import (
     corrections,
     correlation,
     dataset,
+    dates,
     decorrelate,
     enrich,
     features,
@@ -111,6 +112,8 @@ BUILD_OUTPUTS = {
     "report": "build_report.html",
     "identifiers report": "identifiers_report.html",
     "identifiers table": "identifiers.xlsx",
+    "dates report": "dates_report.html",
+    "dates table": "dates.xlsx",
     "missingness report": "missingness_report.html",
     "missingness table": screening.EVIDENCE_FILE,
     "correlation report": "correlation_report.html",
@@ -513,6 +516,18 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
         )
         analysis.cohort = described[site]
         identified_by_site[site] = rows, analysis
+    # The dates: their order, the steps between them, and the batches' timing clusters.
+    dated_by_site = {}
+    for site, (batches, analysed) in cohorts.items():
+        rows, analysis = dates.for_build(
+            batches,
+            catalog_mapping,
+            id_column="Patient Lot/Batch #",
+            order_column=names.col(date_column),
+            analysed=analysed,
+        )
+        analysis.cohort = described[site]
+        dated_by_site[site] = rows, analysis
     missing_by_site = {}
     for site, (batches, analysed) in cohorts.items():
         missing_by_site[site] = missingness.for_build(
@@ -579,6 +594,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
             features=feature_reports,
             merge=merge_report,
             identifiers=identified_by_site,
+            dates=dated_by_site,
             missingness=missing_by_site,
             correlation=correlated_by_site,
             shifts=shifted_by_site,
@@ -621,6 +637,16 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
         with _preparing("the identifiers table", identifiers_table, folder):
             files["identifiers table"] = _write_found(
                 identifiers_table, "Site", identified_by_site, content_digest, run_start
+            )
+        dates_report = staged / BUILD_OUTPUTS["dates report"]
+        with _preparing("the dates report", dates_report, folder):
+            files["dates report"] = report.write(
+                report.build_dates_payload(build_run), dates_report
+            )
+        dates_table = staged / BUILD_OUTPUTS["dates table"]
+        with _preparing("the dates table", dates_table, folder):
+            files["dates table"] = _write_dates(
+                dates_table, dated_by_site, content_digest, run_start
             )
         missing_report = staged / BUILD_OUTPUTS["missingness report"]
         with _preparing("the missingness report", missing_report, folder):
@@ -757,6 +783,46 @@ def _write_found(
             [
                 {"Item": "Batch table content digest", "Value": content_digest},
                 {"Item": "Built", "Value": run_start.strftime("%Y-%m-%d %H:%M")},
+            ]
+        ).to_excel(workbook, sheet_name=screening.ABOUT_SHEET, index=False)
+    return path
+
+
+def _write_dates(
+    path: Path,
+    dated_by_site: dict[str, tuple[list[dict], Any]],
+    content_digest: str,
+    run_start: datetime,
+) -> Path:
+    """Every date column per site (what ``ml task new`` leaves out), its steps, and each
+    batch's timing cluster."""
+    parameters = [
+        {"Site": site, **row} for site, (rows, _) in dated_by_site.items() for row in rows
+    ]
+    steps = [
+        {"Site": site, **row}
+        for site, (_, a) in dated_by_site.items()
+        for row in dates.step_rows(a)
+    ]
+    batches = [
+        {"Site": site, **row}
+        for site, (_, a) in dated_by_site.items()
+        for row in dates.batch_rows(a)
+    ]
+    with pd.ExcelWriter(path) as workbook:
+        pd.DataFrame(parameters).to_excel(
+            workbook, sheet_name=screening.EVIDENCE_SHEET, index=False
+        )
+        pd.DataFrame(steps).to_excel(workbook, sheet_name="Steps", index=False)
+        pd.DataFrame(batches).to_excel(workbook, sheet_name="Batches", index=False)
+        pd.DataFrame(
+            [
+                {"Item": "Batch table content digest", "Value": content_digest},
+                {"Item": "Built", "Value": run_start.strftime("%Y-%m-%d %H:%M")},
+                *(
+                    {"Item": f"Batches described at {site}", "Value": a.cohort or "all"}
+                    for site, (_, a) in dated_by_site.items()
+                ),
             ]
         ).to_excel(workbook, sheet_name=screening.ABOUT_SHEET, index=False)
     return path
@@ -1341,6 +1407,42 @@ def _identifiers_for_new_task(
         (row["Parameter"], f"identifier ({identifiers.evidence(row)})")
         for row in clear.fillna("").to_dict("records")
         if row["Parameter"] not in reinstated
+    ], built
+
+
+def _dates_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[str, str]], str]:
+    """Every date column the latest build found at the site, with why, for a new task file;
+    and when that build ran. Without a build to read, a warning and nothing."""
+    if not config:
+        log.warn(
+            MODULE, "No config.yaml found: the new task file lists no date columns to leave out"
+        )
+        return [], ""
+    workspace.load_vocabulary(config)
+    where = workspace.batch_table_folder(config).file(BUILD_OUTPUTS["dates table"])
+    try:
+        found = share.read_excel(where.with_sheet(screening.EVIDENCE_SHEET))
+        about = share.read_excel(where.with_sheet(screening.ABOUT_SHEET))
+    except Exception as exc:
+        log.warn(
+            MODULE,
+            f"The latest build's dates table could not be read ({exc}): the new task file lists "
+            "no date columns to leave out — run `ml build`, then make the task again",
+            str(where),
+        )
+        return [], ""
+    built = dict(zip(about["Item"].astype(str), about["Value"].astype(str))).get("Built", "")
+    if found.empty:
+        return [], built
+    here = found[found["Site"] == workspace.site_name(config)].fillna("")
+    return [
+        (
+            row["Parameter"],
+            f"a date ({row['Kind']}"
+            + (f", step {int(row['Position'])} of the timeline" if row["Position"] != "" else "")
+            + "): a model would learn when a batch was made",
+        )
+        for row in here.to_dict("records")
     ], built
 
 
@@ -1981,6 +2083,12 @@ def _parser() -> argparse.ArgumentParser:
         "groups over time, each with why",
     )
     new.add_argument(
+        "--keep-dates",
+        action="store_true",
+        help="do not exclude the date columns the latest build's dates report finds "
+        "(excluded by default)",
+    )
+    new.add_argument(
         "--keep-identifiers",
         action="store_true",
         help="do not exclude the identifiers the latest build's identifiers report finds "
@@ -2040,8 +2148,10 @@ def _run(args) -> int:
             ([], "") if args.keep_identifiers else _identifiers_for_new_task(found)
         )
         identified = [(p, why) for p, why in identified if p not in dict(screened)]
+        dated, dated_built = ([], "") if args.keep_dates else _dates_for_new_task(found)
+        dated = [(p, why) for p, why in dated if p not in dict(screened + identified)]
         shifting, built = _shifting_for_new_task(found) if args.exclude_shifting else ([], "")
-        shifting = [(p, why) for p, why in shifting if p not in dict(screened + identified)]
+        shifting = [(p, why) for p, why in shifting if p not in dict(screened + identified + dated)]
         path = scaffold.init(
             args.folder,
             args.target,
@@ -2056,6 +2166,8 @@ def _run(args) -> int:
             shifting_built=built,
             identified=identified,
             identified_built=identified_built,
+            dated=dated,
+            dated_built=dated_built,
         )
         catalog = None
         if found:
@@ -2087,6 +2199,11 @@ def _run(args) -> int:
                             f"{len(identified)} parameters excluded (build {identified_built})",
                         )
                     ]
+                ),
+                *(
+                    []
+                    if args.keep_dates
+                    else [("Dates", f"{len(dated)} date columns excluded (build {dated_built})")]
                 ),
                 *(
                     [("Run in groups", f"{len(shifting)} parameters excluded (build {built})")]

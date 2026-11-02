@@ -196,7 +196,7 @@ def _mostly(parsed: pd.Series, present: int) -> bool:
     return present > 0 and parsed.notna().sum() >= 0.9 * present
 
 
-def _is_date(values: pd.Series, value_type: str) -> bool:
+def is_date(values: pd.Series, value_type: str) -> bool:
     if value_type == "datetime" or pd.api.types.is_datetime64_any_dtype(values):
         return True
     if pd.api.types.is_numeric_dtype(values):
@@ -403,7 +403,7 @@ def for_build(
         if int(values.notna().sum()) < MIN_VALUES:
             report.not_analysed[str(column)] = f"fewer than {MIN_VALUES} values"
             continue
-        if _is_date(values, value_type):
+        if is_date(values, value_type):
             report.not_analysed[str(column)] = "a date"
             continue
         report.tested += 1

@@ -215,7 +215,7 @@ footer code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
     { id: "g_src", x: 20, y: 70, w: 212, h: 460, label: "" },
     { id: "g_cat", x: 255, y: 212, w: 230, h: 144, label: "Data/catalog/<site>/" },
     { id: "g_build", x: 505, y: 70, w: 250, h: 420, label: "" },
-    { id: "g_out", x: 785, y: 70, w: 230, h: 386, label: "Data/batch_data/<site>/" },
+    { id: "g_out", x: 785, y: 70, w: 230, h: 458, label: "Data/batch_data/<site>/" },
     { id: "g_run", x: 1300, y: 70, w: 185, h: 300, label: "runs/<run id>/" },
   ];
 
@@ -254,12 +254,14 @@ footer code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
     F(795, 128, 210, "build_report", "build_report.html"),
     F(795, 164, 210, "id_report", "identifiers_report.html"),
     F(795, 200, 210, "id_xlsx", "identifiers.xlsx"),
-    F(795, 236, 210, "miss_report", "missingness_report.html"),
-    F(795, 272, 210, "miss_xlsx", "missingness.xlsx"),
-    F(795, 308, 210, "corr_report", "correlation_report.html"),
-    F(795, 344, 210, "shifts_report", "shifts_report.html"),
-    F(795, 380, 210, "shifts_xlsx", "shifts.xlsx"),
-    F(795, 416, 210, "build_manifest", "batch_table_manifest.json"),
+    F(795, 236, 210, "dates_report", "dates_report.html"),
+    F(795, 272, 210, "dates_xlsx", "dates.xlsx"),
+    F(795, 308, 210, "miss_report", "missingness_report.html"),
+    F(795, 344, 210, "miss_xlsx", "missingness.xlsx"),
+    F(795, 380, 210, "corr_report", "correlation_report.html"),
+    F(795, 416, 210, "shifts_report", "shifts_report.html"),
+    F(795, 452, 210, "shifts_xlsx", "shifts.xlsx"),
+    F(795, 488, 210, "build_manifest", "batch_table_manifest.json"),
 
     { id: "h_propose", kind: "human", x: 795, y: 600, w: 210, h: 48, label: "Click to draw, tick to propose", sub: "identifiers · missingness · correlation" },
     F(795, 680, 210, "proposal", "proposal.csv"),
@@ -302,17 +304,18 @@ footer code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
     { f: "b5", t: "b6", p: [[630, 340], [630, 350]] },
     { f: "b6", t: "b7", p: [[630, 382], [630, 392]] },
     { f: "b7", t: "g_out", p: [[730, 408], [785, 408]] },
-    { f: "g_out", t: "h_propose", p: [[900, 456], [900, 600]], cls: "screen", lab: ["read the reports", 908, 535] },
+    { f: "g_out", t: "h_propose", p: [[900, 528], [900, 600]], cls: "screen", lab: ["read the reports", 908, 570] },
     { f: "h_propose", t: "proposal", p: [[900, 648], [900, 680]], cls: "screen" },
     { f: "proposal", t: "add", p: [[900, 712], [900, 744]], cls: "screen" },
-    { f: "miss_xlsx", t: "add", p: [[795, 288], [771, 288], [771, 766], [795, 766]], cls: "screen", lab: ["evidence", 764, 600, false, "end"] },
+    { f: "miss_xlsx", t: "add", p: [[795, 360], [771, 360], [771, 766], [795, 766]], cls: "screen", lab: ["evidence", 764, 600, false, "end"] },
     { f: "add", t: "register", p: [[1005, 766], [1060, 766]], cls: "screen" },
     { f: "register", t: "status", p: [[1260, 766], [1300, 766]], cls: "screen" },
     { f: "register", t: "g_build", p: [[1160, 788], [1160, 824], [748, 824], [748, 490]], cls: "screen", lab: ["build reads the site's decisions, to show them in its reports", 790, 816] },
     { f: "register", t: "run", p: [[1160, 744], [1160, 320]], cls: "screen", lab: ["exclusions at the task's site", 1152, 520, false, "end"] },
     { f: "register", t: "task_new", p: [[1236, 744], [1236, 722], [1282, 722], [1282, 110], [1260, 110]], cls: "screen" },
     { f: "batch_data", t: "run", p: [[1005, 108], [1046, 108], [1046, 298], [1060, 298]] },
-    { f: "shifts_xlsx", t: "task_new", p: [[1005, 396], [1026, 396], [1026, 124], [1060, 124]] },
+    { f: "shifts_xlsx", t: "task_new", p: [[1005, 468], [1026, 468], [1026, 124], [1060, 124]] },
+    { f: "dates_xlsx", t: "task_new", p: [[1005, 288], [1016, 288], [1016, 128], [1060, 128]] },
     { f: "id_xlsx", t: "task_new", p: [[1005, 216], [1036, 216], [1036, 132], [1060, 132]] },
     { f: "task_new", t: "task_yaml", p: [[1160, 140], [1160, 166]] },
     { f: "task_yaml", t: "task_catalog", p: [[1150, 206], [1150, 222]], cls: "dash" },
@@ -326,12 +329,12 @@ footer code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
   // ── Routes the chips highlight ────────────────────────────────────────────
   const SRC = ["catalog", "vocab", "phfA", "phfB", "mapping", "remfg", "lvcoa", "raw", "sitemaps", "extra", "g_src"];
   const BUILD = ["build", "b1", "b2", "b3", "b4", "b5", "b6", "b7", "g_build"];
-  const OUT = ["g_out", "batch_data", "build_report", "id_report", "id_xlsx", "miss_report", "miss_xlsx", "corr_report", "shifts_report", "shifts_xlsx", "build_manifest"];
+  const OUT = ["g_out", "batch_data", "build_report", "id_report", "id_xlsx", "dates_report", "dates_xlsx", "miss_report", "miss_xlsx", "corr_report", "shifts_report", "shifts_xlsx", "build_manifest"];
   const RUN = ["g_run", "r_data", "r_enc", "r_meta", "r_encoding", "r_report", "r_inputs", "r_manifest"];
   const PATHS = {
     monthly: [...SRC, "validate", "check", "g_cat", "cat_report", "new_params", "cat_manifest", "h_catalog", ...BUILD, ...OUT, "register", "status", "batch_data", "run", ...RUN],
     screening: ["g_out", "id_report", "miss_report", "corr_report", "miss_xlsx", "h_propose", "proposal", "add", "register", "status", "g_build", "run", "task_new"],
-    newtask: ["g_out", "batch_data", "id_xlsx", "shifts_xlsx", "task_catalog", "register", "task_new", "task_yaml", "run", ...RUN],
+    newtask: ["g_out", "batch_data", "id_xlsx", "dates_xlsx", "shifts_xlsx", "task_catalog", "register", "task_new", "task_yaml", "run", ...RUN],
     reproduce: [...RUN, "rerun", "encode", "encoded"],
   };
 
@@ -451,13 +454,15 @@ footer code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
     b3: ["03 · Join other systems", "<p>Databricks viability readings, vector certificates by lot, raw material lots, clinical sites and countries.</p>"],
     b4: ["04 · Calculate features", `<p>The feature registry, in order. A feature is made only when the catalog lists it and its inputs are there; otherwise the run log says <i>not in catalog</i> or <i>blocked</i>.</p>` + DL([["Settings", `${C("features.*")} setpoints; ${C("moi_target")}, ${C("medium_glucose")}, ${C("impurity_spec_limits")} unblock features`]])],
     b5: ["05 · Batch table, check", `<p>The site's batches as one table, with a ${C("Site Merged")} column naming the site; catalog parameters the site never records are left out. Sanity checks, and which catalog parameters the table still lacks.</p>`],
-    b6: ["06 · Analyse the site", `<p>Over the site's batches (${C("build.missingness_cohort")}): which parameters name a batch rather than describe it, how parameters go missing, which rank the batches alike, and which run in groups over time per manufacturing site.</p>` + DL([["Settings", `${C("build.date_column")}, ${C("correlation_threshold")} (0.9), ${C("identifier_unique")} (0.95), ${C("identifier_near_unique")} (0.5)`]])],
+    b6: ["06 · Analyse the site", `<p>Over the site's batches (${C("build.missingness_cohort")}): which parameters name a batch rather than describe it, the order of the dates and the batches' timing clusters, how parameters go missing, which rank the batches alike, and which run in groups over time per manufacturing site.</p>` + DL([["Settings", `${C("build.date_column")}, ${C("correlation_threshold")} (0.9), ${C("identifier_unique")} (0.95), ${C("identifier_near_unique")} (0.5)`]])],
     b7: ["07 · Write and upload", `<p>Writes every file into a staging folder, then uploads them together with the manifest. ${C("build.write_parquet")} adds the Parquet copy.</p>`],
 
     batch_data: ["The batch table", "<p>One row per batch of the site, cleaned, with the calculated features, in a folder named after the site. The Parquet copy keeps column types; tasks read it.</p>"],
     build_report: ["build_report.html", "<p>Overview, sources, every cleaning change, catalog coverage (and why a parameter is absent), joined sources, the run log and provenance.</p>"],
     id_report: ["identifiers_report.html", "<p>Read first. Per site: the parameters that name something rather than describe the batch (patient and case codes, lot and reference codes, running numbers, free text), as identifiers or possible identifiers. Click a row to list its values; tick the possible ones no task should use to propose screening them out.</p>"],
     id_xlsx: ["identifiers.xlsx", `<p>Every identifier and possible identifier per site, with its kind and signs. ${C("ml task new")} lists the identifiers under ${C("predictors.exclude")}.</p>`],
+    dates_report: ["dates_report.html", "<p>Per site: the order each batch's dates fall in, the steps between them, and the batches clustered by their timing, with plots of the clusters over the process and over the calendar. Takes no part in screening.</p>"],
+    dates_xlsx: ["dates.xlsx", `<p>Every date column, every step and each batch's timing cluster. ${C("ml task new")} lists the date columns under ${C("predictors.exclude")}.</p>`],
     miss_report: ["missingness_report.html", "<p>Per site: how each parameter goes missing and which go missing together. Click a row to draw its pattern; tick groups and parameters to propose a screening decision.</p>"],
     miss_xlsx: ["missingness.xlsx", "<p>Every parameter per site: missing %, pattern, last measured, what the identifiers report found it to be, and its missingness and correlation group with the suggested representative. What <code>ml screening add</code> checks a proposal against and cites.</p>"],
     corr_report: ["correlation_report.html", "<p>Numerical parameters grouped by Spearman |ρ|, each group with a suggested representative, whatever the register says. Ticked groups exclude every member but the one you keep.</p>"],
@@ -471,7 +476,7 @@ footer code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
     register: ["Screening register", "<p>An append-only log of decisions: exclude or reinstate a parameter at a site, with reason and evidence. Each decision belongs to the report it was made in; the last decision per parameter, site and report stands, and either report's exclusion leaves a parameter out. A digest shows edits made outside <code>ml screening</code>.</p>" + DL([["Read by", "build (both reports show it: ⊘ own, ◇ the other's, ⚠ conflicts), task new, task run"], ["Config", C("sharepoint.screening")]])],
     status: ["ml screening status", "<p>What is excluded today, and the decisions the latest build gives a reason to revisit: review date passed, measured again, missing % moved, representative excluded too; and the conflicts. Reinstate or re-exclude with a new proposal.</p>"],
 
-    task_new: ["ml task new &lt;folder&gt;", `<p>Creates a task folder with an annotated ${C("task.yaml")} and its ${C("task_catalog.xlsx")}. It already lists what the register excludes, and the identifiers the latest build found, under ${C("predictors.exclude")}.</p>` + DL([["Options", `${C("--target COL")}, ${C("--question TEXT")}, ${C("--exclude-shifting")}, ${C("--keep-identifiers")}, ${C("--force")}`]])],
+    task_new: ["ml task new &lt;folder&gt;", `<p>Creates a task folder with an annotated ${C("task.yaml")} and its ${C("task_catalog.xlsx")}. It already lists what the register excludes, and the identifiers and date columns the latest build found, under ${C("predictors.exclude")}.</p>` + DL([["Options", `${C("--target COL")}, ${C("--question TEXT")}, ${C("--exclude-shifting")}, ${C("--keep-identifiers")}, ${C("--keep-dates")}, ${C("--force")}`]])],
     task_catalog: ["task_catalog.xlsx", `<p>In the task folder: the catalog rows of the parameters this task can use as input features, chosen exactly as ${C("ml task run")} chooses its predictors, and what each correlation representative stands for. ${C("ml task new")} writes it; ${C("ml task catalog")} writes it again after you edit ${C("task.yaml")}.</p>`],
     task_yaml: ["task.yaml", "<p>The question, in settings you edit:</p><ul><li><b>site</b>: the one it is about (from the config)</li><li><b>cohort</b>: filters, date range</li><li><b>target</b>: numeric, binary or two periods</li><li><b>roles</b>: id, group (e.g. vector lot), patient</li><li><b>predictors</b>: include, exclude, by catalog column</li><li><b>clustering</b>: off · describe · keep_one · residualise · summarise</li><li><b>encoding</b>, <b>quality</b>, <b>missingness</b>, <b>report</b></li></ul>"],
     run: ["ml task run", "<p>1 selects the cohort, 2 chooses predictors (minus target, roles, your excludes, catalog rules, register exclusions, features made from the target), 3 fits the preprocessing, 4 writes the dataset, 5 checks the counts agree. A failed run keeps its folder as <code>….failed</code>.</p>" + DL([["Reads", "the site's batch table, catalog, both manifests, the register's decisions at the site"], ["Options", `${C("--task T")}, repeatable`]])],

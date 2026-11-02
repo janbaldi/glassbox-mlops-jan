@@ -45,8 +45,8 @@ the parameters this task can use as input features. They are chosen exactly as
 `ml task run` chooses its predictors, on the latest batch table: everything the
 catalog lists and the batch table has, minus the target and what is computed
 from it, the roles (id, group, patient), the task file's own exclusions (the
-screened ones, the identifiers and, with `--exclude-shifting`, the shifting
-parameters among them),
+screened ones, the identifiers, the dates and, with `--exclude-shifting`, the
+shifting parameters among them),
 catalog-category rules, what the register excludes at the task's sites, and the
 site-relative features. Its *Represents* column names what each correlation
 representative stands in for at the task's sites; the other columns are the
@@ -92,6 +92,18 @@ screen them out ([chapter 2](02-monthly-update.md#5-read-the-identifiers-report)
 `--keep-identifiers` lists none. Without a build to read, `ml task new` warns and
 lists none.
 
+**Date columns are left out by default** too, read from the latest build's
+`dates.xlsx`: a model fitted on a date learns when a batch was made
+([chapter 2](02-monthly-update.md#6-read-the-dates-report)). The durations derived
+from them are numbers, and stay in. `--keep-dates` lists none:
+
+```yaml
+    # Dates and times at this site, as the build of 2026-10-21 14:03 found them
+    # (dates_report.html): a model would learn when a batch was made. The durations
+    # derived from them stay usable. Delete a line to use the date again.
+    - {column: "Day 3 incubator out", reason: "a date (date and time, step 5 of the timeline): a model would learn when a batch was made"}
+```
+
 To also leave out every parameter that runs in groups over time, as a lot does
 (the [shifts report](02-monthly-update.md#the-shifts-report)), add
 `--exclude-shifting`:
@@ -100,7 +112,7 @@ To also leave out every parameter that runs in groups over time, as a lot does
 uv run ml task new tasks/car_expression_no_lots --target "Product CAR expression (%)" --exclude-shifting
 ```
 
-One already listed as screened or as an identifier is listed once. It lists them from the latest build's `shifts.xlsx`, at any manufacturing site,
+One already listed as screened, as an identifier or as a date is listed once. It lists them from the latest build's `shifts.xlsx`, at any manufacturing site,
 each with why, a group of parameters that change on the same days one after the
 other:
 

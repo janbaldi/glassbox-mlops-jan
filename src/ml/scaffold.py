@@ -37,6 +37,8 @@ def init(
     site: str = "",
     identified: list[tuple[str, str]] = (),
     identified_built: str = "",
+    dated: list[tuple[str, str]] = (),
+    dated_built: str = "",
 ) -> Path:
     """Write ``<folder>/task.yaml``, pointing at ``config``. Returns its path.
 
@@ -44,7 +46,8 @@ def init(
     excludes when the task is made, and ``shifting`` for every parameter the latest
     build (run at ``shifting_built``) found running in groups over time, when asked
     for, and ``identified`` for every identifier the latest build (run at
-    ``identified_built``) found at the site. They are written out as
+    ``identified_built``) found at the site, and ``dated`` for every date column it
+    found there (run at ``dated_built``). They are written out as
     ``predictors.exclude`` entries, so the task file itself says what it leaves out
     and why; ``conflicts`` (representatives the
     register excludes too) as comments above them. ``site`` is the key of the site
@@ -77,6 +80,8 @@ def init(
                 conflicts,
                 identified,
                 identified_built,
+                dated,
+                dated_built,
             ),
         )
     )
@@ -93,9 +98,11 @@ def _excludes(
     conflicts: list[str] = (),
     identified: list[tuple[str, str]] = (),
     identified_built: str = "",
+    dated: list[tuple[str, str]] = (),
+    dated_built: str = "",
 ) -> str:
     """The ``predictors.exclude`` lines of a new task: empty, or the parameters left out."""
-    if not screened and not shifting and not identified:
+    if not screened and not shifting and not identified and not dated:
         return "  exclude: []                     # single columns: [{column: ..., reason: ...}]\n"
     lines = ["  exclude:                        # single columns: [{column: ..., reason: ...}]"]
     if screened:
@@ -120,6 +127,13 @@ def _excludes(
             "    # in the identifiers report so new tasks keep it.",
         ]
         lines += [_exclude(column, reason) for column, reason in identified]
+    if dated:
+        lines += [
+            f"    # Dates and times at this site, as the build of {dated_built} found them",
+            "    # (dates_report.html): a model would learn when a batch was made. The durations",
+            "    # derived from them stay usable. Delete a line to use the date again.",
+        ]
+        lines += [_exclude(column, reason) for column, reason in dated]
     if shifting:
         lines += [
             f"    # Run in groups over time at a manufacturing site, as the build of {built}",

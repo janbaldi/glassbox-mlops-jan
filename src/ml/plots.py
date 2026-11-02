@@ -437,3 +437,279 @@ def missing_by_category(group) -> Block | None:
             height=320,
         )
     )
+
+
+# ---------------------------------------------------------------------------
+# The dates report
+# ---------------------------------------------------------------------------
+#: Timing clusters, in fixed order (Timing 1 is always the first hue). Validated with the
+#: dataviz palette checks: lightness band, chroma, colour-blind and normal-vision separation
+#: of neighbours. Three fall below 3:1 against a white page, so every figure names its
+#: clusters in the legend and the hover, and the cluster table repeats them.
+TIMING_COLOURS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300")
+#: Sequential, light to dark, one hue: a share from 0 to 1.
+SEQUENTIAL_BLUE = [[0.0, "#f4f6f8"], [0.5, "#86b6ef"], [1.0, "#104281"]]
+
+
+def _short(name: str, length: int = 40) -> str:
+    return name if len(name) <= length else name[: length - 1] + "…"
+
+
+def _unit(report) -> tuple[str, float]:
+    """Hours, or days when the batches' timelines run beyond four days."""
+    spans = [s for s in report.span_of if s is not None]
+    return ("days", 24.0) if spans and float(np.median(spans)) > 96 else ("hours", 1.0)
+
+
+def _colour_of(report) -> dict[str, str]:
+    return {c.name: TIMING_COLOURS[i % len(TIMING_COLOURS)] for i, c in enumerate(report.clusters)}
+
+
+def timing_profiles(report) -> Block | None:
+    """Each batch's timeline through the sorted columns, by cluster, with each cluster's
+    median in bold: what the clusters look like over the process."""
+    if len(report.order) < 2:
+        return None
+    unit, per = _unit(report)
+    names = [_short(c) for c in report.order]
+    colours = _colour_of(report)
+    groups = [(c.name, colours[c.name]) for c in report.clusters] or [("All batches", INK)]
+    figure_ = go.Figure()
+    for name, colour in groups:
+        xs, ys, text = [], [], []
+        for i, batch in enumerate(report.batches):
+            if report.clusters and report.cluster_of[i] != name:
+                continue
+            for column, label in zip(report.order, names):
+                value = report.hours[column][i]
+                if value is not None:
+                    xs.append(value / per)
+                    ys.append(label)
+                    text.append(f"{batch} · {report.dates[i]}")
+            xs.append(None)
+            ys.append(None)
+            text.append("")
+        figure_.add_trace(
+            go.Scatter(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=colour, width=1),
+                opacity=0.25,
+                legendgroup=name,
+                showlegend=False,
+                text=text,
+                hovertemplate=f"%{{text}}<br>%{{y}}: %{{x:.1f}} {unit}<extra>{name}</extra>",
+            )
+        )
+    medians = (
+        [(c.name, colours[c.name], c.profile, c.batches) for c in report.clusters]
+        if report.clusters
+        else [
+            (
+                "All batches",
+                INK,
+                [
+                    float(np.median([v for v in report.hours[c] if v is not None]))
+                    for c in report.order
+                ],
+                len(report.batches),
+            )
+        ]
+    )
+    for name, colour, profile, count in medians:
+        figure_.add_trace(
+            go.Scatter(
+                x=[None if v is None else v / per for v in profile],
+                y=names,
+                mode="lines+markers",
+                line=dict(color=colour, width=2.5),
+                marker=dict(size=8, color=colour, line=dict(color="white", width=1.5)),
+                name=f"{name} ({count})",
+                legendgroup=name,
+                hovertemplate=f"{name} median<br>%{{y}}: %{{x:.1f}} {unit}<extra></extra>",
+            )
+        )
+    figure_.update_layout(showlegend=True)
+    figure_ = _style(
+        figure_,
+        "Each batch's timeline, by timing cluster",
+        x=f"{unit} from the anchor",
+        height=max(300, 30 * len(names) + 120),
+    )
+    figure_.update_yaxes(autorange="reversed", showgrid=False)
+    figure_.update_xaxes(showgrid=True, gridcolor=GRID, zeroline=True, zerolinecolor=MUTED)
+    return _fig(
+        figure_,
+        "One thin line per batch, through its timepoints in the sorted order; the bold line "
+        "is the cluster's median. Where the bold lines part, the clusters differ.",
+    )
+
+
+def timing_calendar(report) -> Block | None:
+    """When each cluster's batches ran: one lane per cluster, one dot per batch at its
+    anchor date."""
+    dated = [i for i, d in enumerate(report.dates) if d]
+    if len(dated) < 2 or not report.clusters:
+        return None
+    unit, per = _unit(report)
+    colours = _colour_of(report)
+    lanes = [(c.name, colours[c.name]) for c in report.clusters]
+    if any(not report.cluster_of[i] for i in dated):
+        lanes.append(("Not clustered", MUTED))
+    figure_ = go.Figure()
+    for name, colour in lanes:
+        mine = [i for i in dated if (report.cluster_of[i] or "Not clustered") == name]
+        if not mine:
+            continue
+        figure_.add_trace(
+            go.Scatter(
+                x=[report.dates[i] for i in mine],
+                y=[name] * len(mine),
+                mode="markers",
+                marker=dict(
+                    size=10, color=colour, symbol="line-ns", line=dict(color=colour, width=2)
+                ),
+                name=f"{name} ({len(mine)})",
+                text=[report.batches[i] for i in mine],
+                customdata=[
+                    "" if report.span_of[i] is None else f"{report.span_of[i] / per:.1f} {unit}"
+                    for i in mine
+                ],
+                hovertemplate="%{text} · %{x}<br>anchor to last timepoint %{customdata}"
+                f"<extra>{name}</extra>",
+            )
+        )
+    figure_.update_layout(showlegend=True)
+    figure_ = _style(
+        figure_, "When each timing cluster ran", height=max(200, 46 * len(lanes) + 110)
+    )
+    figure_.update_yaxes(autorange="reversed", showgrid=False)
+    figure_.update_xaxes(showgrid=True, gridcolor=GRID)
+    return _fig(
+        figure_,
+        "One tick per batch at its anchor date, one lane per cluster. Lanes that fill "
+        "stretches of the calendar one after the other are eras: the timing changed. Lanes "
+        "that run side by side vary from batch to batch.",
+    )
+
+
+def step_calendar(report, limit: int = 12) -> Block | None:
+    """Each step's duration over calendar time, by cluster: small multiples."""
+    steps = report.clustered_on or list(report.step_hours)
+    if not steps:
+        return None
+    steps = steps[:limit]
+    colours = _colour_of(report)
+    columns = 3 if len(steps) > 4 else 2 if len(steps) > 1 else 1
+    rows = int(np.ceil(len(steps) / columns))
+    figure_ = make_subplots(
+        rows=rows,
+        cols=columns,
+        subplot_titles=[_short(s, 48) for s in steps],
+        vertical_spacing=min(0.12, 0.6 / rows),
+        horizontal_spacing=0.06,
+    )
+    groups = [(c.name, colours[c.name]) for c in report.clusters] or [("All batches", INK)]
+    for n, step in enumerate(steps):
+        row, col = n // columns + 1, n % columns + 1
+        values = report.step_hours[step]
+        for name, colour in groups:
+            mine = [
+                i
+                for i, v in enumerate(values)
+                if v is not None
+                and report.dates[i]
+                and (not report.clusters or report.cluster_of[i] == name)
+            ]
+            figure_.add_trace(
+                go.Scatter(
+                    x=[report.dates[i] for i in mine],
+                    y=[values[i] for i in mine],
+                    mode="markers",
+                    marker=dict(size=8, color=colour, line=dict(color="white", width=1)),
+                    name=name,
+                    legendgroup=name,
+                    showlegend=n == 0,
+                    text=[report.batches[i] for i in mine],
+                    hovertemplate=f"%{{text}} · %{{x}}<br>{_short(step, 60)}: %{{y:.1f}} h"
+                    f"<extra>{name}</extra>",
+                ),
+                row=row,
+                col=col,
+            )
+    figure_.update_layout(showlegend=True)
+    figure_ = _style(figure_, "Each step's duration over the months", height=230 * rows + 40)
+    # The panel titles sit at the top of the plot area: the legend goes above them, just
+    # under the figure's title.
+    figure_.update_layout(
+        legend=dict(y=1 - 40 / (230 * rows + 68), yref="container", yanchor="top"),
+        margin=dict(t=96),
+    )
+    figure_.update_yaxes(showgrid=True, gridcolor=GRID)
+    for row in range(1, rows + 1):
+        figure_.update_yaxes(title_text="hours", row=row, col=1)
+    figure_.update_annotations(font_size=11)
+    return _fig(
+        figure_,
+        "One panel per step (hours between two columns next to each other in the sorted order), "
+        "one dot per batch at its anchor date. A cloud that rises or falls is a step whose "
+        "length changed over time.",
+    )
+
+
+def timing_order(report) -> Block | None:
+    """How often each column comes before each other: the order the process runs in."""
+    if len(report.order) < 2:
+        return None
+    names = [_short(c, 32) for c in report.order]
+    z = [[None if v is None else 100 * v for v in row] for row in report.before]
+    figure_ = go.Figure(
+        go.Heatmap(
+            z=z,
+            x=names,
+            y=names,
+            colorscale=SEQUENTIAL_BLUE,
+            zmin=0,
+            zmax=100,
+            colorbar=dict(title="%", thickness=10),
+            text=[["" if v is None else f"{v:.0f}" for v in row] for row in z],
+            texttemplate="%{text}" if len(names) <= 14 else None,
+            hovertemplate="%{y} before %{x}: %{z:.0f}% of the batches with both<extra></extra>",
+            xgap=2,
+            ygap=2,
+        )
+    )
+    figure_ = _style(
+        figure_,
+        "How often the row comes before the column",
+        height=max(320, 26 * len(names) + 160),
+    )
+    figure_.update_yaxes(autorange="reversed", showgrid=False)
+    figure_.update_xaxes(tickangle=-40)
+    return _fig(
+        figure_,
+        "Columns in the sorted order. Above the diagonal should be dark (100%: the row "
+        "always comes first); a light cell there is a pair that swaps places in some batches.",
+    )
+
+
+def in_progress(report) -> Block | None:
+    """Batches in progress per day: how the batches overlap in calendar time."""
+    if not report.progress:
+        return None
+    figure_ = go.Figure(
+        go.Scatter(
+            x=report.progress_days,
+            y=report.progress,
+            mode="lines",
+            line=dict(color=INK, width=2, shape="hv"),
+            hovertemplate="%{x}: %{y} batches in progress<extra></extra>",
+        )
+    )
+    figure_ = _style(figure_, "Batches in progress per day", y="batches", height=280)
+    figure_.update_yaxes(rangemode="tozero")
+    return _fig(
+        figure_,
+        "A batch is in progress from its anchor date to the day of its last timepoint.",
+    )
