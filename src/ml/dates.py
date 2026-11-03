@@ -65,6 +65,9 @@ WEEKDAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
 
 @dataclass
 class DatesReport:
+    #: Set by the build: the subsite it is about, level by level (manufacturing site, then
+    #: each split column), "All" where it takes every value of a level.
+    levels: dict[str, str] = field(default_factory=dict)
     #: Every date column found, with its kind.
     kinds: dict[str, str] = field(default_factory=dict)
     #: The columns on the timeline, in order, and the ones off it with why.

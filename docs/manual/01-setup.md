@@ -86,10 +86,13 @@ and shifts reports, in this order:
 | `production_line` | names a site's production line or train (blank where a site has none) |
 | `work_shift` | names the work shift, splitting sites and their lines further |
 
-A batch's subsite is its manufacturing site and every one of these it has a value
-in: *Plant · Train A · Night*; a blank skips its level. Without a key, or without its
-column in the batch records, the build warns, names the fix, and does without that
-split; its log lists every subsite with its batches. `vocabulary.csv`
+The reports analyse every combination separately, with *All* for a level: the site
+whole, per train, per shift, and per train and shift (*Plant · Train A · Night*). In
+their sidebar you pick the manufacturing site, then the train, then the shift, each
+starting on *All*. A batch with a blank value is only in its level's *All*. Without a
+key, or without its column in the batch records, the build warns, names the fix, and
+does without that split, and the reports' sidebar says why; the build log lists every
+subsite with its batches. `vocabulary.csv`
 in this repository is a copy of the `Names` sheet for reference.
 
 ## Step 4: known corrections

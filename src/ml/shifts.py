@@ -68,6 +68,9 @@ THRESHOLD = 0.8
 
 @dataclass
 class ShiftReport:
+    #: Set by the build: the subsite it is about, level by level (manufacturing site, then
+    #: each split column), "All" where it takes every value of a level.
+    levels: dict[str, str] = field(default_factory=dict)
     #: The parameters that run in groups, and how many were tested.
     analysed: list[str] = field(default_factory=list)
     tested: int = 0

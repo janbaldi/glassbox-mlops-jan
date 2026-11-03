@@ -85,6 +85,8 @@ class BuildRun:
     unmapped_sites: list[str] = field(default_factory=list)
     source_rows: list[list[str]] = field(default_factory=list)
     run_start: datetime = field(default_factory=datetime.now)
+    #: Why the shifts and dates reports' subsites are not split by a column, one line each.
+    subsite_notes: list[str] = field(default_factory=list)
     #: site → :func:`ml.dates.for_build` over its batches: one row per date column
     dates: dict[str, tuple[list[dict], Any]] = field(default_factory=dict)
     #: site → :func:`ml.missingness.for_build` over its batches: one row per column, the groups
@@ -497,10 +499,14 @@ def _missingness_help(run: BuildRun) -> dict | None:
 SUBSITE_LABEL = "Manufacturing site"
 
 
-def _subsite_chooser(options: list[tuple[str, list]]) -> Block | None:
-    """One subsite's blocks at a time, picked in the sidebar. Every chooser of a report shares
-    the one picker, so all its sections show the same subsite."""
-    kept = [{"label": label, "blocks": clean(blocks)} for label, blocks in options]
+def _subsite_chooser(options: list[tuple[str, dict, list]]) -> Block | None:
+    """One subsite's blocks at a time, picked in the sidebar level by level (manufacturing
+    site, then each split column, ``All`` first). Every chooser of a report shares the one
+    picker, so all its sections show the same subsite."""
+    kept = [
+        {"label": label, "levels": levels, "blocks": clean(blocks)}
+        for label, levels, blocks in options
+    ]
     kept = [option for option in kept if option["blocks"]]
     if not kept:
         return None
@@ -525,6 +531,7 @@ def _date_sections(run: BuildRun) -> list[dict | None]:
         timeline.append(
             (
                 label,
+                analysis.levels,
                 clean(
                     [
                         plots.date_timeline(analysis),
@@ -543,7 +550,11 @@ def _date_sections(run: BuildRun) -> list[dict | None]:
             )
         )
         clock.append(
-            (label, clean([plots.date_clock(analysis)]) or [md(f"No time of day at {label}.")])
+            (
+                label,
+                analysis.levels,
+                clean([plots.date_clock(analysis)]) or [md(f"No time of day at {label}.")],
+            )
         )
     empty = md(f"No date column has {dates.MIN_VALUES} values at any manufacturing site.")
     return [
@@ -799,12 +810,12 @@ def _shift_viewer(run: BuildRun) -> dict | None:
     """Per plant: the groups over time of the parameters picked, and the tables to pick them."""
     sites = []
     for plant, (rows, analysis) in run.shifts.items():
-        if not rows:
-            continue
-        headers = list(rows[0])
+        # A subsite where nothing runs in groups stays, so every combination can be picked.
+        headers = list(rows[0]) if rows else ["Parameter", "Shift group"]
         sites.append(
             {
                 "label": plant,
+                "levels": analysis.levels,
                 "segments": analysis.segments,
                 "groups": {g.name: g.members for g in analysis.groups},
                 "group_headers": [
@@ -1175,6 +1186,7 @@ def build_dates_payload(run: BuildRun) -> dict[str, Any]:
         + (" Batches described — " + "; ".join(cohorts) + "." if cohorts else ""),
         "subtitle": f"CAR-T manufacturing data · run {run.run_start.strftime('%Y-%m-%d %H:%M')}",
         "site": " and ".join(run.merge.site_rows),
+        "subsite_notes": run.subsite_notes,
         "sections": [section for section in sections if section],
         "help": _dates_help(run),
         "compact": True,
@@ -1261,7 +1273,7 @@ def build_shifts_payload(run: BuildRun) -> dict[str, Any]:
         "`ml task new --exclude-shifting` leaves them all out of a task. Parameters that run "
         f"in groups — {tested}.",
         _shifts_help(run),
-    ) | {"site": " and ".join(run.merge.site_rows)}
+    ) | {"site": " and ".join(run.merge.site_rows), "subsite_notes": run.subsite_notes}
 
 
 def write(payload: dict[str, Any], output_path: str | Path) -> Path:

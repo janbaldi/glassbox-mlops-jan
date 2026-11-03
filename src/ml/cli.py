@@ -498,11 +498,12 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
         analysed, counted = _analysed_batches(batches, site, config)
         cohorts[site] = batches, analysed
         described[site] = "; ".join(filter(None, (cohort, counted)))
-    # The manufacturing sites, split by production line where one is recorded: the dates and
-    # the shifts run per subsite, as a plant's process and its lots do.
-    subsites = _subsites(cohorts)
+    # The manufacturing sites, split by production line and work shift where recorded: the
+    # dates and the shifts run per subsite (every combination, "All" included), as a plant's
+    # process and its lots do.
+    subsites, subsite_notes = _subsites(cohorts)
     dated_by_site = {}
-    for label, batches, counted, from_sources in subsites:
+    for label, levels, batches, counted, from_sources in subsites:
         rows, analysis = dates.for_build(
             batches,
             catalog_mapping,
@@ -511,6 +512,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
             analysed=counted,
         )
         analysis.cohort = f"{int(counted.sum()):,} batches from {', '.join(from_sources)}"
+        analysis.levels = levels
         dated_by_site[label] = rows, analysis
     missing_by_site = {}
     for site, (batches, analysed) in cohorts.items():
@@ -578,6 +580,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
             features=feature_reports,
             merge=merge_report,
             dates=dated_by_site,
+            subsite_notes=subsite_notes,
             missingness=missing_by_site,
             correlation=correlated_by_site,
             shifts=shifted_by_site,
@@ -686,22 +689,30 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
 
 
 #: The vocabulary's optional column keys that split a manufacturing site into subsites, in
-#: order: a plant's production line, then the work shift.
-SUBSITE_KEYS = ("production_line", "work_shift")
+#: order: a plant's production line, then the work shift; with what each level is called
+#: when the vocabulary has no key for it.
+SUBSITE_KEYS = {"production_line": "Line", "work_shift": "Shift"}
+#: The first level of a subsite, and the value of a level that takes all its values.
+SITE_LEVEL, ALL = "Manufacturing site", "All"
 
 
 def _subsites(
     cohorts: dict[str, tuple[pd.DataFrame, pd.Series | None]],
-) -> list[tuple[str, pd.DataFrame, pd.Series, list[str]]]:
-    """The batches the missingness report counts, per subsite: each manufacturing site, split
-    by every :data:`SUBSITE_KEYS` column the batch has a value in (*Plant · Line A · Night*;
-    a blank skips its level). Per subsite: its label, its batches, which of them are
-    counted (the others are only drawn elsewhere), and the data sources they come from.
+) -> tuple[list[tuple[str, dict, pd.DataFrame, pd.Series, list[str]]], list[str]]:
+    """The batches the missingness report counts, per subsite, and why a split could not be
+    made (one line each).
+
+    A subsite is a manufacturing site and, for each :data:`SUBSITE_KEYS` column in turn, one
+    of its values there or ``All`` of them: every combination the batches have, so a site
+    is analysed whole, per line, per shift, and per line and shift. A batch with no value
+    in a split column is only in that level's ``All``. Per subsite: its label (*Plant ·
+    Train A · Night*, ``All`` left out), its levels, its batches, which of them are counted
+    (the others are only drawn elsewhere), and the data sources they come from.
 
     Time, the lots and the process run per plant, line and shift rather than per data
     source. Without the plant column, each data source counts as one plant. A split the
     vocabulary has no key for, whose column the batch table lacks, or that is blank in
-    every batch, is warned about and left out.
+    every batch, is said (and warned about) and left out.
     """
     every = pd.concat([batches for batches, _ in cohorts.values()])
     counted = pd.concat(
@@ -713,60 +724,67 @@ def _subsites(
     source = pd.concat([pd.Series(site, index=b.index) for site, (b, _) in cohorts.items()])
     column = names.col("manufacturing_site")
     if column in every.columns:
-        label = every[column].astype("string").str.strip()
+        plant = every[column].astype("string").str.strip().replace("", pd.NA)
     else:
         log.warn(MODULE, f"No '{column}' column: the subsites are the data sources instead")
-        label = source.astype("string")
-    for key in SUBSITE_KEYS:
+        plant = source.astype("string")
+    notes: list[str] = []
+    splits: list[tuple[str, pd.Series]] = []
+    for key, called in SUBSITE_KEYS.items():
         split = names.optional_col(key)
         if not split:
-            log.warn(
-                MODULE,
-                f"The vocabulary has no column key '{key}', so the shifts and dates reports do "
-                "not split the sites by it — add a Names row (kind column, key "
-                f"{key}, the column's name) to split them",
+            notes.append(
+                f"No {called.lower()} split: the vocabulary has no column key '{key}' (add a "
+                "Names row: kind column, that key, the column's name)."
             )
-            continue
-        if split not in every.columns:
-            log.warn(
-                MODULE,
-                f"The batch table has no '{split}' column (vocabulary key {key}): the sites "
-                "are not split by it — check the name against the batch records",
+        elif split not in every.columns:
+            notes.append(
+                f"No {called.lower()} split: the batch table has no '{split}' column "
+                f"(vocabulary key {key}); check the name against the batch records."
             )
-            continue
-        value = every[split].astype("string").str.strip().replace("", pd.NA)
-        if value.isna().all():
-            log.warn(
-                MODULE,
-                f"'{split}' is blank in every batch the reports describe: the sites are not "
-                "split by it",
-            )
-            continue
-        label = label.where(value.isna(), label + " · " + value)
-    if label.isna().any():
+        else:
+            value = every[split].astype("string").str.strip().replace("", pd.NA)
+            if value.isna().all():
+                notes.append(
+                    f"No {called.lower()} split: '{split}' is blank in every batch described."
+                )
+            else:
+                splits.append((split, value))
+    for note in notes:
+        log.warn(MODULE, note)
+    if plant.isna().any():
         log.warn(
             MODULE,
-            f"{int(label.isna().sum()):,} batches have no {column}: not in the shifts or dates",
+            f"{int(plant.isna().sum()):,} batches have no {column}: not in the shifts or dates",
         )
     out = []
-    for name in sorted(label.dropna().unique()):
-        here = (label == name).fillna(False).astype(bool)
-        out.append((str(name), every[here], counted[here], sorted(set(source[here]))))
+    for name in sorted(plant.dropna().unique()):
+        combos = [({SITE_LEVEL: str(name)}, (plant == name).fillna(False).astype(bool))]
+        for split, value in splits:
+            grown = []
+            for levels, here in combos:
+                grown.append((levels | {split: ALL}, here))
+                for v in sorted(value[here].dropna().unique()):
+                    grown.append((levels | {split: str(v)}, here & (value == v).fillna(False)))
+            combos = grown
+        for levels, here in combos:
+            label = " · ".join(v for v in levels.values() if v != ALL)
+            out.append((label, levels, every[here], counted[here], sorted(set(source[here]))))
     log.info(
         MODULE,
         f"{len(out)} subsites for the shifts and dates reports",
-        ", ".join(f"{name} ({int(c.sum()):,} batches)" for name, _, c, _ in out),
+        ", ".join(f"{name} ({int(c.sum()):,} batches)" for name, _, _, c, _ in out),
     )
-    return out
+    return out, notes
 
 
 def _shifts_by_subsite(
-    subsites: list[tuple[str, pd.DataFrame, pd.Series, list[str]]], order_column: str
+    subsites: list[tuple[str, dict, pd.DataFrame, pd.Series, list[str]]], order_column: str
 ) -> dict[str, tuple[list[dict], Any]]:
     """The shifts analysis per subsite (:func:`_subsites`). The screening register has no
     part in it."""
     out = {}
-    for name, batches, counted, sources in subsites:
+    for name, levels, batches, counted, sources in subsites:
         rows, found = shifts.for_build(
             batches,
             id_column="Patient Lot/Batch #",
@@ -776,6 +794,7 @@ def _shifts_by_subsite(
         )
         found.sources = sources
         found.cohort = f"{int(counted.sum()):,} batches from {', '.join(sources)}"
+        found.levels = levels
         out[name] = rows, found
     return out
 
@@ -1336,6 +1355,12 @@ def _screened_for_new_task(
     )
 
 
+def _first(items: list[str], sep: str, keep: int = 3) -> str:
+    """The first few of ``items``, and how many more: a task file's reason stays one line."""
+    more = len(items) - keep
+    return sep.join(items[:keep]) + (f" and {more} more" if more > 0 else "")
+
+
 def _shifting_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[str, str]], str]:
     """Every parameter the latest build found running in groups over time, at any plant,
     with why, for a new task file; and when that build ran."""
@@ -1370,7 +1395,7 @@ def _shifting_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[st
             f"{row['Groups']} groups at {row['Manufacturing site']}"
             + (f", changes with {group}" if group else "")
         )
-    return [(p, "runs in groups over time: " + "; ".join(w)) for p, w in why.items()], built
+    return [(p, "runs in groups over time: " + _first(w, "; ")) for p, w in why.items()], built
 
 
 def _catalog_groups_for_new_task(
@@ -1455,7 +1480,7 @@ def _dates_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[str, 
     return [
         (
             parameter,
-            f"a date ({', '.join(kinds[parameter])}; at {', '.join(places[parameter])}): a "
+            f"a date ({', '.join(kinds[parameter])}; at {_first(places[parameter], ', ')}): a "
             "model would learn when a batch was made",
         )
         for parameter in kinds

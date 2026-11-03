@@ -175,20 +175,23 @@ def test_the_build_writes_the_dates_report_and_table(built):
     # every section follows.
     assert payload["site"] == names.site("a")
     plant = f"{names.site('a')} plant"
+    line = names.optional_col("production_line")
     for section in payload["sections"][:2]:
         (chooser,) = section["blocks"]
         assert chooser["kind"] == "site_chooser" and chooser["group"] == "subsite"
         assert [o["label"] for o in chooser["options"]] == [
+            plant,
             f"{plant} · Line A",
             f"{plant} · Line B",
         ]
+        assert chooser["options"][1]["levels"] == {"Manufacturing site": plant, line: "Line A"}
     timeline = payload["sections"][0]["blocks"][0]["options"]
     assert timeline[0]["blocks"][0]["kind"] == "figure"
-    assert timeline[1]["blocks"][0]["text"].startswith("No date column has 20 values")
+    assert timeline[2]["blocks"][0]["text"].startswith("No date column has 20 values")
     book = pd.ExcelFile(folder / "dates.xlsx")
     assert {"Days", screening.ABOUT_SHEET} <= set(book.sheet_names)
     table = pd.read_excel(book, sheet_name=screening.EVIDENCE_SHEET)
-    assert set(table["Manufacturing site"]) == {f"{plant} · Line A", f"{plant} · Line B"}
+    assert set(table["Manufacturing site"]) == {plant, f"{plant} · Line A", f"{plant} · Line B"}
     assert names.col("date_start") in set(table["Parameter"])
     order = list(cli.BUILD_OUTPUTS)
     assert order.index("dates report") < order.index("missingness report")

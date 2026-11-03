@@ -110,7 +110,8 @@ subsite**: each manufacturing site, split by its production line and its work sh
 where the batch records them (the vocabulary's `production_line` and `work_shift`
 columns; [chapter 1](01-setup.md#step-3-the-vocabulary)), over the batches the
 missingness report counts in its statistics. The sidebar names the site and picks the
-subsite; both sections follow it. A subsite with fewer than 20 batches with a date
+subsite level by level (manufacturing site, train, shift, each with *All*); both
+sections follow it, and a split the build could not make is said there. A subsite with fewer than 20 batches with a date
 says so. Nothing here needs a decision:
 `ml task new` leaves every date column out of a new task anyway (a model fitted on a
 date learns when a batch was made; [chapter 4](04-tasks.md#1-create-a-task)). The
@@ -253,7 +254,8 @@ It works **per subsite** (the `Manufacturing Site` column, split further by the
 vocabulary's `production_line` and `work_shift` columns where a batch has a value)
 within the site's batches, since time and the lots run per plant, line and shift,
 over the batches the missingness report counts in its statistics. The sidebar names
-the site, and picks the subsite (or names it, when there is one). Dates count by the day: the batches
+the site, and picks the subsite level by level (manufacturing site, train, shift, each
+with *All*: the site whole is one of the analyses). Dates count by the day: the batches
 of one day have no order, and on the day a lot changes some of them can have the
 old lot and some the new one; that day ends the old lot's group and starts the
 new one's.

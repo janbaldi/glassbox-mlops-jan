@@ -521,6 +521,32 @@ def _pick_site(label: str, labels: list, key: str) -> str:
         return st.radio(label, labels, horizontal=True, key=f"site{key}")
 
 
+def _pick_subsite(options: list[dict], label: str, key: str) -> int:
+    """Which of ``options`` the sidebar picks: level by level (manufacturing site, then each
+    split column, "All" first) when they carry their levels, else by label. A level with
+    one value is named rather than picked."""
+    if not options or not options[0].get("levels"):
+        labels = [option["label"] for option in options]
+        return labels.index(_pick_site(label, labels, key))
+    pool = list(range(len(options)))
+    path = []
+    with SLOTS.get("site") or st.sidebar:
+        for level in options[0]["levels"]:
+            values = sorted(
+                {options[i]["levels"].get(level, "All") for i in pool},
+                key=lambda v: (v != "All", v),
+            )
+            if len(values) == 1:
+                st.markdown(f"**{html.escape(level)}:** {html.escape(values[0])}")
+                chosen = values[0]
+            else:
+                # Keyed by the levels above it: a new site starts its lines afresh.
+                chosen = st.selectbox(level, values, key=f"pick{key}-{level}-{'|'.join(path)}")
+            path.append(chosen)
+            pool = [i for i in pool if options[i]["levels"].get(level, "All") == chosen]
+    return pool[0]
+
+
 def render_missing_viewer(block: dict, key: str) -> None:
     """The plot on top; below it the groups and the parameters: click one to draw it.
 
@@ -826,7 +852,7 @@ def render_site_chooser(block: dict, key: str) -> None:
     labels = [option["label"] for option in block["options"]]
     group = block.get("group") or key
     if group not in PICKED:
-        PICKED[group] = _pick_site(block["label"], labels, group)
+        PICKED[group] = labels[_pick_subsite(block["options"], block["label"], group)]
     chosen = PICKED[group] if PICKED[group] in labels else labels[0]
     option = block["options"][labels.index(chosen)]
     for i, child in enumerate(option["blocks"]):
@@ -835,9 +861,11 @@ def render_site_chooser(block: dict, key: str) -> None:
 
 def render_shift_viewer(block: dict, key: str) -> None:
     """The groups over time of the row clicked; below, the groups and parameters to click."""
-    labels = [site["label"] for site in block["sites"]]
-    chosen = _pick_site(block["site_label"], labels, key)
-    site = block["sites"][labels.index(chosen)]
+    site = block["sites"][_pick_subsite(block["sites"], block["site_label"], key)]
+    chosen = site["label"]
+    if not site["rows"] and not site["groups"]:
+        st.caption(f"Nothing runs in groups over time at {chosen}.")
+        return
     top = st.container()
     plot = f"plot{key}-{chosen}"
     draw: dict = {}
@@ -1138,9 +1166,11 @@ def report_page() -> None:
     with st.sidebar:
         SLOTS["site"] = st.container()
         if PAYLOAD.get("site"):
-            # The data site, above the picker of its manufacturing sites and lines.
+            # The data site, above the picker of its manufacturing sites, lines and shifts.
             with SLOTS["site"]:
                 st.markdown(f"**Site:** {html.escape(PAYLOAD['site'])}")
+                for note in PAYLOAD.get("subsite_notes") or []:
+                    st.caption(note)
         if compact and PAYLOAD.get("lead"):
             with st.popover("About this report", icon=":material/info:", width="stretch"):
                 st.markdown(PAYLOAD["lead"])

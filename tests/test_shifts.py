@@ -87,11 +87,21 @@ def test_the_build_writes_the_shifts_report_and_table_and_finds_the_demo_lots(bu
     payload = stlite.read_payload(page.read_text(encoding="utf-8"))
     viewer = payload["sections"][0]["blocks"][0]
     assert viewer["kind"] == "shift_viewer" and viewer["site_label"] == "Manufacturing site"
-    # Site A's own batches: its plant, split by its two production lines.
+    # Site A's own batches: its plant whole, and per production line, each picked by level.
     plant = f"{names.site('a')} plant"
-    assert {s["label"] for s in viewer["sites"]} == {f"{plant} · Line A"}, "line B is too small"
+    line = names.optional_col("production_line")
+    assert [(s["label"], s["levels"]) for s in viewer["sites"]] == [
+        (plant, {"Manufacturing site": plant, line: "All"}),
+        (f"{plant} · Line A", {"Manufacturing site": plant, line: "Line A"}),
+        (f"{plant} · Line B", {"Manufacturing site": plant, line: "Line B"}),
+    ]
     assert payload["site"] == names.site("a")
+    # Site A records no work shift: the report says so.
+    assert any("No shift split" in note for note in payload["subsite_notes"])
     for site in viewer["sites"]:
+        if site["label"].endswith("Line B"):
+            assert site["rows"] == [] and site["groups"] == {}, "too few batches"
+            continue
         # The medium and cytokine lots change on the same days.
         assert {c("media_lot"), c("cytokine_lot")} in [set(g) for g in site["groups"].values()]
         grouped = {m for members in site["groups"].values() for m in members}
@@ -103,7 +113,8 @@ def test_the_build_writes_the_shifts_report_and_table_and_finds_the_demo_lots(bu
         sheet_name=screening.EVIDENCE_SHEET,
     )
     lots = table[table["Parameter"] == c("media_lot")]
-    assert len(lots) == 1 and lots["Shift group"].str.startswith("Shifting").all()
+    assert set(lots["Manufacturing site"]) == {plant, f"{plant} · Line A"}
+    assert lots["Shift group"].str.startswith("Shifting").all()
     path = shared(built["directory"], built["config"], "batch_table", screening.EVIDENCE_FILE)
     evidence = pd.read_excel(path, sheet_name=screening.EVIDENCE_SHEET)
     assert not any("shift" in column.lower() for column in evidence.columns)
@@ -120,7 +131,7 @@ def test_a_new_task_can_leave_out_every_parameter_that_runs_in_groups(built, tmp
     # task carries both reasons.
     why = excluded[c("media_lot")]
     assert why.startswith("catalog Variable Role is 'Material lot ID'; runs in groups over time: ")
-    assert why.count("changes with Shifting") == 1
+    assert why.count("changes with Shifting") == 2, "the plant whole, and its line A"
     shifting = text.split("Run in groups over time at a manufacturing site")[1]
     assert f'column: "{c("media_lot")}"' in shifting
     assert f"at {names.site('a')} plant · Line A" in why and names.site("b") not in why
@@ -140,35 +151,32 @@ def test_the_shifts_run_per_manufacturing_site_and_production_line():
     north[plant] = ["P1"] * 60 + ["P2"] * 60
     south[plant] = "P2"
     cohorts = {"North": (north, None), "South": (south, None)}
-    found = cli._shifts_by_subsite(cli._subsites(cohorts), "date")
+    subsites, _ = cli._subsites(cohorts)
+    found = cli._shifts_by_subsite(subsites, "date")
     assert set(found) == {"P1", "P2"}
     p1, p2 = found["P1"][1], found["P2"][1]
     # P2 makes batches for both sources.
     assert (p1.sources, p2.sources) == (["North"], ["North", "South"])
     assert p2.cohort.startswith("180 batches")
+    assert p2.levels == {"Manufacturing site": "P2"}
     # The register has no part in it: every parameter takes part.
     assert "lot" in p1.analysed and "lot" in p2.analysed
     assert all(g.name.endswith(" @ P2") for g in p2.groups)
-    # A production line splits its plant further; batches without one stay with the plant.
+    # A production line splits its plant further; every plant is also analysed whole, and
+    # a batch without a line only there.
     north[line] = ["L1"] * 30 + [None] * 30 + ["L2"] * 60
-    subsites = cli._subsites({"North": (north, None), "South": (south, None)})
-    assert [(name, len(batches)) for name, batches, _, _ in subsites] == [
-        ("P1", 30),
-        ("P1 · L1", 30),
-        ("P2", 120),
-        ("P2 · L2", 60),
+    subsites, _ = cli._subsites({"North": (north, None), "South": (south, None)})
+    assert [(name, levels[line], len(batches)) for name, levels, batches, _, _ in subsites] == [
+        ("P1", "All", 60),
+        ("P1 · L1", "L1", 30),
+        ("P2", "All", 180),
+        ("P2 · L2", "L2", 60),
     ]
     # Without the plant column (nor the line), each data source is one plant.
-    found = cli._shifts_by_subsite(
-        cli._subsites(
-            {
-                s: (b.drop(columns=[plant, line], errors="ignore"), a)
-                for s, (b, a) in cohorts.items()
-            }
-        ),
-        "date",
+    subsites, _ = cli._subsites(
+        {s: (b.drop(columns=[plant, line], errors="ignore"), a) for s, (b, a) in cohorts.items()}
     )
-    assert set(found) == {"North", "South"}
+    assert {name for name, *_ in subsites} == {"North", "South"}
 
 
 def test_subsites_split_by_line_then_shift_and_say_what_they_could_not_use(caplog):
@@ -177,31 +185,43 @@ def test_subsites_split_by_line_then_shift_and_say_what_they_could_not_use(caplo
     shift = names.optional_col("work_shift")
     frame = _lots().rename(columns={"id": "Patient Lot/Batch #"})
     frame[plant] = "P1"
-    frame[line] = ["A"] * 100 + [""] * 140  # a blank skips its level
+    frame[line] = ["A"] * 100 + [""] * 140  # a blank is only in its level's All
     frame[shift] = ["Day", "Night"] * 120
-    subsites = cli._subsites({"North": (frame, None)})
-    assert [(name, len(batches)) for name, batches, _, _ in subsites] == [
+    subsites, notes = cli._subsites({"North": (frame, None)})
+    # Every combination, "All" first: the plant whole, per shift, per line, per line and shift.
+    assert [(name, len(batches)) for name, _, batches, _, _ in subsites] == [
+        ("P1", 240),
+        ("P1 · Day", 120),
+        ("P1 · Night", 120),
+        ("P1 · A", 100),
         ("P1 · A · Day", 50),
         ("P1 · A · Night", 50),
-        ("P1 · Day", 70),
-        ("P1 · Night", 70),
     ]
-    assert "4 subsites for the shifts and dates reports" in caplog.text
-    # A split column the batch table lacks, or that is blank everywhere, is warned about.
+    assert subsites[4][1] == {"Manufacturing site": "P1", line: "A", shift: "Day"}
+    assert notes == [] and "6 subsites for the shifts and dates reports" in caplog.text
+    # A split column the batch table lacks, or that is blank everywhere, is said and warned.
     caplog.clear()
-    subsites = cli._subsites({"North": (frame.drop(columns=shift).assign(**{line: None}), None)})
+    subsites, notes = cli._subsites(
+        {"North": (frame.drop(columns=shift).assign(**{line: None}), None)}
+    )
     assert [name for name, *_ in subsites] == ["P1"]
-    assert f"'{line}' is blank in every batch" in caplog.text
-    assert f"The batch table has no '{shift}' column" in caplog.text
+    assert notes == [
+        f"No line split: '{line}' is blank in every batch described.",
+        f"No shift split: the batch table has no '{shift}' column (vocabulary key work_shift); "
+        "check the name against the batch records.",
+    ]
+    assert all(note in caplog.text for note in notes)
 
 
 def test_the_demo_sites_split_into_their_subsites(built):
-    for config, expected in (
-        ("config", {"Line A", "Line B"}),
-        ("config_b", {"Day", "Night"}),
+    for config, plant, split, values in (
+        ("config", f"{names.site('a')} plant", "production_line", ["All", "Line A", "Line B"]),
+        ("config_b", f"{names.site('b')} plant", "work_shift", ["All", "Day", "Night"]),
     ):
         page = shared(built["directory"], built[config], "batch_table", "dates_report.html")
         payload = stlite.read_payload(page.read_text(encoding="utf-8"))
         (chooser,) = payload["sections"][0]["blocks"]
-        labels = [option["label"] for option in chooser["options"]]
-        assert {label.split(" · ")[-1] for label in labels} == expected, labels
+        levels = [option["levels"] for option in chooser["options"]]
+        column = names.optional_col(split)
+        assert [level[column] for level in levels] == values
+        assert {level["Manufacturing site"] for level in levels} == {plant}
