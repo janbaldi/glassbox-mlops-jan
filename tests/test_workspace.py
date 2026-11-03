@@ -506,14 +506,40 @@ def test_a_new_task_lists_every_parameter_the_catalog_defaults_leave_out(built, 
     )
     assert excluded[c("patient_id")] == "catalog Variable Role is 'Identifier'"
     assert excluded[c("dose_cells")] == "catalog Functional Type is 'Formulation and dose'"
-    # Listed once; a later group (here the dates) names it in a comment.
-    assert text.count(f'column: "{c("date_start")}"') == 1
-    assert f"#   {c('date_start')} (listed above)" in text
+    # Listed in every group that leaves it out (a timestamp, and a date): every reason.
+    assert text.count(f'column: "{c("date_start")}"') == 2
+    assert excluded[c("date_start")].startswith("catalog Variable Role is 'Timestamp'; a date (")
     # None of them is among the task's usable inputs; a process parameter is.
     usable = set(pd.read_excel(folder / "task_catalog.xlsx")["Parameter"])
     assert usable and not usable & set(excluded)
     role = dict(zip(catalog["Parameter"], catalog["Variable Role"]))
     assert any(role.get(p) == "Process parameter" for p in usable)
+
+
+def test_a_column_listed_for_several_reasons_keeps_them_all(caplog):
+    spec = taskconfig.parse(
+        {
+            "task": {"name": "t"},
+            "target": {"column": "y"},
+            "predictors": {
+                "exclude": [
+                    {"column": "a", "reason": "screened out by S-0001: retired (North)"},
+                    {"column": "b", "reason": "one"},
+                    {"column": "a", "reason": "catalog Variable Role is 'Timestamp'"},
+                    {"column": "a", "reason": "catalog Variable Role is 'Timestamp'"},
+                ]
+            },
+        },
+        Path("."),
+    )
+    # In the order listed, the first place kept, a repeated reason once.
+    assert spec.predictors.exclude == (
+        ("a", "screened out by S-0001: retired (North); catalog Variable Role is 'Timestamp'"),
+        ("b", "one"),
+    )
+    # Reinstated in the register: the screening line can go, the parameter stays out.
+    cli._check_listed_screening(spec, screened={})
+    assert "delete that line; the parameter stays out for its other reasons" in caplog.text
 
 
 def test_without_a_catalog_a_new_task_leaves_the_defaults_out_by_rule(tmp_path):
@@ -533,10 +559,10 @@ def test_without_a_catalog_a_new_task_leaves_the_defaults_out_by_rule(tmp_path):
     )
     text = path.read_text(encoding="utf-8")
     assert "# Catalog Functional Type: the catalog has no such column" in text
-    assert "#   a (listed above)" in text
+    assert text.count('column: "a"') == 2
     spec = taskconfig.load(path)
     assert dict(spec.predictors.exclude) == {
-        "a": "catalog Variable Role is 'Identifier'",
+        "a": "catalog Variable Role is 'Identifier'; a date",
         "b": "catalog Variable Role is 'Identifier'",
     }
     assert spec.predictors.exclude_by_catalog == ()

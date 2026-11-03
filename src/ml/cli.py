@@ -1266,11 +1266,20 @@ def _warn_conflicts(decisions: list[screening.Decision], site: str) -> list[str]
 def _check_listed_screening(spec: TaskSpec, screened: dict) -> None:
     """Warn about task-file exclusions copied from the register that it no longer makes."""
     for column, reason in spec.predictors.exclude:
-        if reason.startswith("screened out by ") and column not in screened:
+        parts = reason.split("; ")
+        copied = [part for part in parts if part.startswith("screened out by ")]
+        if copied and column not in screened:
+            others = [part for part in parts if part not in copied]
             log.warn(
                 MODULE,
-                f"task.yaml still excludes '{column}' ({reason}), but the screening register "
-                "no longer does at this task's site — delete the line to use it again",
+                f"task.yaml still excludes '{column}' ({'; '.join(copied)}), but the screening "
+                "register no longer does at this task's site — "
+                + (
+                    "delete that line; the parameter stays out for its other reasons: "
+                    + "; ".join(others)
+                    if others
+                    else "delete the line to use it again"
+                ),
             )
 
 

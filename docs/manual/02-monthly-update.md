@@ -279,8 +279,8 @@ writes to it, so every parameter takes part and its tables have no boxes to
 tick. To leave all of them out of a task, the grouped ones too, create it with
 `ml task new <folder> --exclude-shifting`
 ([chapter 4](04-tasks.md#1-create-a-task)): it reads every parameter from
-`shifts.xlsx`. One the register already screens out is listed once, as
-screened.
+`shifts.xlsx`. One the register already screens out is listed for both, and
+the task keeps both reasons.
 
 ## 7. Check the standing decisions
 

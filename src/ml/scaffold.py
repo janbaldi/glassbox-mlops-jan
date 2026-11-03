@@ -74,8 +74,8 @@ def init(
     group. Without them (no catalog could be read) the rules are written as
     ``predictors.exclude_by_catalog`` instead, so a run still applies them.
 
-    A parameter is listed once, under the first group that has it; a later group names it
-    in a comment, so every group shows all its members.
+    A parameter is listed in every group that leaves it out, each time with that group's
+    reason, so every group shows all its members; a run joins its reasons.
     """
     path = (Path(folder).expanduser() / TASK_FILE).resolve()
     if path.exists() and not force:
@@ -144,21 +144,14 @@ def _excludes(
     catalog_groups: list[tuple[str, str | None, list[str]]] = (),
 ) -> str:
     """The ``predictors.exclude`` lines of a new task: empty, or every parameter left out on
-    its own line, in groups, each parameter once."""
+    its own line, in groups. A parameter is listed in every group that leaves it out, each
+    time with that group's reason; a run joins its reasons."""
     if not screened and not shifting and not dated and not catalog_groups:
         return "  exclude: []                     # single columns: [{column: ..., reason: ...}]\n"
     lines = ["  exclude:                        # single columns: [{column: ..., reason: ...}]"]
-    listed: set[str] = set()
 
     def entries(pairs) -> list[str]:
-        out = []
-        for column, reason in pairs:
-            if column in listed:
-                out.append(f"    #   {column} (listed above)")
-            else:
-                listed.add(column)
-                out.append(_exclude(column, reason))
-        return out
+        return [_exclude(column, reason) for column, reason in pairs]
 
     if screened:
         lines += [

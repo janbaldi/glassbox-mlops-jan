@@ -116,14 +116,13 @@ def test_a_new_task_can_leave_out_every_parameter_that_runs_in_groups(built, tmp
     text = (folder / "task.yaml").read_text(encoding="utf-8")
     assert "Run in groups over time at a manufacturing site, as the build of" in text
     excluded = dict(taskconfig.load(folder / "task.yaml").predictors.exclude)
-    # The medium lot is listed by its catalog role first; the shifts name it in a comment.
-    assert excluded[c("media_lot")] == "catalog Variable Role is 'Material lot ID'"
+    # The medium lot is listed under its catalog role and again for running in groups: the
+    # task carries both reasons.
+    why = excluded[c("media_lot")]
+    assert why.startswith("catalog Variable Role is 'Material lot ID'; runs in groups over time: ")
+    assert why.count("changes with Shifting") == 1
     shifting = text.split("Run in groups over time at a manufacturing site")[1]
-    assert f"#   {c('media_lot')} (listed above)" in shifting
-    # Its reason for running in groups says where; a parameter no catalog role covered would
-    # carry it.
-    why = dict(cli._shifting_for_new_task(built["config"])[0])[c("media_lot")]
-    assert why.startswith("runs in groups over time: ") and why.count("changes with Shifting") == 1
+    assert f'column: "{c("media_lot")}"' in shifting
     assert f"at {names.site('a')} plant · Line A" in why and names.site("b") not in why
     # Without the option, nothing that runs in groups is listed.
     plain = tmp_path / "plain"

@@ -110,7 +110,7 @@ Every key is optional except `target.column`. Quote a column name that holds
 | `roles.group` | — | Grouping column (e.g. vector lot) for grouped folds. |
 | `roles.patient` | — | Joins a patient's batches into one group. |
 | `predictors.include` | all | Use exactly these predictors. A screened parameter here stops the run. |
-| `predictors.exclude` | — | `[{column, reason}]`: single columns to leave out. |
+| `predictors.exclude` | — | `[{column, reason}]`: single columns to leave out. A column listed more than once keeps every reason, joined by `; `. |
 | `predictors.exclude_by_catalog`, `include_by_catalog` | — | `{catalog column: [values]}`: leave out, or keep only, parameters with these catalog values. A value no catalog row has is warned about; a column the catalog does not have refuses the run. |
 | `clustering.action` | `describe` | `off`, `describe`, `keep_one`, `residualise` or `summarise`. |
 | `clustering.min_stability` | `0.8` | Act on a group only if it comes back in this share of resamples. |

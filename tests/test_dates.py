@@ -206,15 +206,12 @@ def test_a_new_task_leaves_out_every_date_column(built, tmp_path):
     assert "Dates and times at this site" in (folder / "task.yaml").read_text("utf-8")
     excluded = dict(taskconfig.load(folder / "task.yaml").predictors.exclude)
     assert found <= set(excluded)
-    dated = {p for p, why in excluded.items() if why.startswith("a date (")}
-    assert dated and dated <= found
-    # A date at any subsite is left out once: by its catalog role when it has one (the
-    # catalog groups come first), else as a date, the reason saying where it was found.
-    text = (folder / "task.yaml").read_text("utf-8")
+    # Every date column is listed as a date, the reason saying where it was found; one the
+    # catalog also leaves out carries both reasons.
+    for parameter in found:
+        assert "a date (" in excluded[parameter] and "Line A" in excluded[parameter]
     start = names.col("date_start")
-    assert excluded[start] == "catalog Variable Role is 'Timestamp'"
-    assert f"#   {start} (listed above)" in text.split("Dates and times at this site")[1]
-    assert all("Line A" in why for why in (excluded[p] for p in dated))
+    assert excluded[start].startswith("catalog Variable Role is 'Timestamp'; a date (")
     kept = tmp_path / "kept"
     assert cli.main(["--config", config, "task", "new", str(kept), "--keep-dates"]) == 0
     reasons = dict(taskconfig.load(kept / "task.yaml").predictors.exclude).values()

@@ -333,23 +333,31 @@ def _names(data: dict, key: str, where: str, errors: list[str]) -> tuple[str, ..
 
 
 def _reasoned(data: dict, key: str, where: str, errors: list[str]) -> tuple[tuple[str, str], ...]:
-    """A list of ``{column, reason}`` entries — a decision and why it was taken."""
+    """A list of ``{column, reason}`` entries — a decision and why it was taken.
+
+    A column may be listed more than once, once per reason (a new task lists a parameter
+    under every group that leaves it out): its reasons are joined with ``; ``, in order,
+    and it keeps the place of its first entry.
+    """
     value = data.get(key) or []
     if not isinstance(value, list):
         errors.append(f"{where}.{key}: expected a list of column/reason entries")
         return ()
-    out: list[tuple[str, str]] = []
+    reasons: dict[str, list[str]] = {}
     for index, item in enumerate(value):
         spot = f"{where}.{key}[{index}]"
         if isinstance(item, str):
-            out.append((item, "no reason given"))
-            continue
-        if not isinstance(item, dict) or "column" not in item:
+            column, reason = item, "no reason given"
+        elif not isinstance(item, dict) or "column" not in item:
             errors.append(f"{spot}: expected {{column: ..., reason: ...}}")
             continue
-        _known(item, ("column", "reason"), spot, errors)
-        out.append((str(item["column"]), str(item.get("reason") or "no reason given")))
-    return tuple(out)
+        else:
+            _known(item, ("column", "reason"), spot, errors)
+            column, reason = str(item["column"]), str(item.get("reason") or "no reason given")
+        listed = reasons.setdefault(column, [])
+        if reason not in listed:
+            listed.append(reason)
+    return tuple((column, "; ".join(why)) for column, why in reasons.items())
 
 
 def _categories(

@@ -95,13 +95,14 @@ by elimination every one it keeps:
     …
 ```
 
-Delete a line to use that parameter. Each parameter is listed once, under the first
-group that has it (screened, then the catalog groups, then the dates and the
-shifts); a later group names it in a comment, `#   Start date (listed above)`. The
-values must match the catalog's exactly: a value no catalog parameter has, or a
-column the catalog does not have, is said in a comment and warned about when the
-task is made. Without a catalog to read, the task gets the same rules as
-`exclude_by_catalog` instead. The list is the catalog of the day: a parameter the
+A parameter is listed in every group that leaves it out (screened, the catalog
+groups, the dates, the shifts), each time with that group's reason, so every group
+shows all its members. A run joins a parameter's reasons, and its `parameters.csv`
+gives them all: `catalog Variable Role is 'Timestamp'; a date (date and time; at …)`.
+To use a parameter, delete every line that names it. The values must match the
+catalog's exactly: a value no catalog parameter has, or a column the catalog does
+not have, is said in a comment and warned about when the task is made. Without a
+catalog to read, the task gets the same rules as `exclude_by_catalog` instead. The list is the catalog of the day: a parameter the
 catalog gains later is not on it; make the task again, or add the line.
 
 **Date columns are left out by default**, every one the latest build's
@@ -124,7 +125,7 @@ To also leave out every parameter that runs in groups over time, as a lot does
 uv run ml task new tasks/car_expression_no_lots --target "Product CAR expression (%)" --exclude-shifting
 ```
 
-One already listed as screened or as a date is listed once. It lists them from the latest build's `shifts.xlsx`, at any manufacturing site and production line,
+One also listed for another reason keeps both. It lists them from the latest build's `shifts.xlsx`, at any manufacturing site and production line,
 each with why, a group of parameters that change on the same days one after the
 other:
 
