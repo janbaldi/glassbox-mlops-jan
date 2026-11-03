@@ -685,17 +685,23 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
     return dict(uploaded)["report"]
 
 
+#: The vocabulary's optional column keys that split a manufacturing site into subsites, in
+#: order: a plant's production line, then the work shift.
+SUBSITE_KEYS = ("production_line", "work_shift")
+
+
 def _subsites(
     cohorts: dict[str, tuple[pd.DataFrame, pd.Series | None]],
 ) -> list[tuple[str, pd.DataFrame, pd.Series, list[str]]]:
     """The batches the missingness report counts, per subsite: each manufacturing site, split
-    by its production line where the batch records one. Per subsite: its label, its batches,
-    which of them are counted (the others are only drawn elsewhere), and the data sources
-    they come from.
+    by every :data:`SUBSITE_KEYS` column the batch has a value in (*Plant · Line A · Night*;
+    a blank skips its level). Per subsite: its label, its batches, which of them are
+    counted (the others are only drawn elsewhere), and the data sources they come from.
 
-    Time, the lots and the process run per plant and line rather than per data source.
-    Without the plant column, each data source counts as one plant; without the line
-    column (or the vocabulary's ``production_line`` key), a plant is not split.
+    Time, the lots and the process run per plant, line and shift rather than per data
+    source. Without the plant column, each data source counts as one plant. A split the
+    vocabulary has no key for, whose column the batch table lacks, or that is blank in
+    every batch, is warned about and left out.
     """
     every = pd.concat([batches for batches, _ in cohorts.values()])
     counted = pd.concat(
@@ -711,14 +717,32 @@ def _subsites(
     else:
         log.warn(MODULE, f"No '{column}' column: the subsites are the data sources instead")
         label = source.astype("string")
-    line = names.optional_col("production_line")
-    if line and line in every.columns:
-        value = every[line].astype("string").str.strip().replace("", pd.NA)
+    for key in SUBSITE_KEYS:
+        split = names.optional_col(key)
+        if not split:
+            log.warn(
+                MODULE,
+                f"The vocabulary has no column key '{key}', so the shifts and dates reports do "
+                "not split the sites by it — add a Names row (kind column, key "
+                f"{key}, the column's name) to split them",
+            )
+            continue
+        if split not in every.columns:
+            log.warn(
+                MODULE,
+                f"The batch table has no '{split}' column (vocabulary key {key}): the sites "
+                "are not split by it — check the name against the batch records",
+            )
+            continue
+        value = every[split].astype("string").str.strip().replace("", pd.NA)
+        if value.isna().all():
+            log.warn(
+                MODULE,
+                f"'{split}' is blank in every batch the reports describe: the sites are not "
+                "split by it",
+            )
+            continue
         label = label.where(value.isna(), label + " · " + value)
-        split = sorted(set(label[value.notna()].dropna()))
-        log.info(MODULE, f"{len(split)} subsites split by {line}", ", ".join(split))
-    elif line:
-        log.info(MODULE, f"No '{line}' column: the plants are not split by production line")
     if label.isna().any():
         log.warn(
             MODULE,
@@ -728,6 +752,11 @@ def _subsites(
     for name in sorted(label.dropna().unique()):
         here = (label == name).fillna(False).astype(bool)
         out.append((str(name), every[here], counted[here], sorted(set(source[here]))))
+    log.info(
+        MODULE,
+        f"{len(out)} subsites for the shifts and dates reports",
+        ", ".join(f"{name} ({int(c.sum()):,} batches)" for name, _, c, _ in out),
+    )
     return out
 
 

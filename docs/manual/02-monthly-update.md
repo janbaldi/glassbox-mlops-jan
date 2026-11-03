@@ -106,8 +106,9 @@ and 10 to 30 seconds to start. Look at these sections:
 
 Open `dates_report.html`. It puts every **date and time column** on one timeline:
 what comes after what, on which day, and at what time of day. It works **per
-manufacturing site and production line** (a *subsite*: the line splits a site where
-the vocabulary's `production_line` column has a value), over the batches the
+subsite**: each manufacturing site, split by its production line and its work shift
+where the batch records them (the vocabulary's `production_line` and `work_shift`
+columns; [chapter 1](01-setup.md#step-3-the-vocabulary)), over the batches the
 missingness report counts in its statistics. The sidebar names the site and picks the
 subsite; both sections follow it. A subsite with fewer than 20 batches with a date
 says so. Nothing here needs a decision:
@@ -248,9 +249,9 @@ such a parameter as a stand-in for time. The report also groups the parameters
 that **change on the same days**, since they say the same thing: which lot a
 batch was made with.
 
-It works **per manufacturing site and production line** (the `Manufacturing Site`
-column, split further by the vocabulary's `production_line` column where it has a
-value) within the site's batches, since time and the lots run per plant and line,
+It works **per subsite** (the `Manufacturing Site` column, split further by the
+vocabulary's `production_line` and `work_shift` columns where a batch has a value)
+within the site's batches, since time and the lots run per plant, line and shift,
 over the batches the missingness report counts in its statistics. The sidebar names
 the site, and picks the subsite (or names it, when there is one). Dates count by the day: the batches
 of one day have no order, and on the day a lot changes some of them can have the

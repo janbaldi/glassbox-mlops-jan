@@ -48,9 +48,11 @@ COLUMNS: dict[str, str | tuple[str, ...]] = {
     "batch_type": "Batch kind",
     "manufacturing_completed": "Manufacturing finished?",
     "manufacturing_site": "Plant",
-    # Optional: splits a manufacturing site into its production lines, for the shifts and
-    # dates reports. A vocabulary without it splits by site only.
+    # Optional: split a manufacturing site into subsites for the shifts and dates reports,
+    # in this order: its production line, then the work shift. A blank value skips its
+    # level; a vocabulary without a key does without that split.
     "production_line": "Production line",
+    "work_shift": "Work shift",
     "pt_cd4_pct": "Thawed CD4 share (%)",
     "pt_cd8_pct": "Thawed CD8 share (%)",
     "pt_cd3_pct": "Thawed CD3 share (%)",
@@ -318,7 +320,7 @@ SHEETS: dict[str, str | int] = {
 
 _REGISTRIES = {"column": COLUMNS, "value": VALUES, "site": SITES, "sheet": SHEETS}
 #: Column keys a vocabulary may leave out; the code that uses them does without.
-OPTIONAL_COLUMNS = frozenset({"production_line"})
+OPTIONAL_COLUMNS = frozenset({"production_line", "work_shift"})
 
 
 @dataclass

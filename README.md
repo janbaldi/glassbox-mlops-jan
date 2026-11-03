@@ -38,10 +38,10 @@ loop, new task, reproduce a run) to highlight it.
 | **catalog** | `catalog.xlsx` on SharePoint: every parameter the batch table may hold, with its type, stage and availability |
 | **site** | the manufacturing site everything is about: `site:` in `config.yaml` (`a` or `b`, as the vocabulary names them) |
 | **batch table** | `batch_data.xlsx` on SharePoint, in the site's folder: one row per batch of that site, cleaned, with calculated features |
-| **dates report** | `dates_report.html`: every date column on one timeline, per manufacturing site and production line: what comes after what, on which day, and at what time of day; `ml task new` leaves every date column out |
+| **dates report** | `dates_report.html`: every date column on one timeline, per manufacturing site, production line and shift: what comes after what, on which day, and at what time of day; `ml task new` leaves every date column out |
 | **missingness report** | `missingness_report.html`: how every parameter goes missing at the site, batch by batch |
 | **correlation report** | `correlation_report.html`: which numerical parameters rank the site's batches alike, and which one could represent each group |
-| **shifts report** | `shifts_report.html`: which parameters run in groups over time, as a lot does, and which change on the same days, per manufacturing site and production line; `ml task new --exclude-shifting` leaves them out of a task |
+| **shifts report** | `shifts_report.html`: which parameters run in groups over time, as a lot does, and which change on the same days, per manufacturing site, production line and shift; `ml task new --exclude-shifting` leaves them out of a task |
 | **task catalog** | `task_catalog.xlsx`, in a task folder: the catalog parameters that task can use as input features, written by `ml task new` (again: `ml task catalog`) |
 | **screening register** | `parameter_screening.xlsx` on SharePoint: the log of parameters you decided to leave out of every task, and why |
 | **task** | one question, written as a `task.yaml` in a folder of its own |

@@ -196,6 +196,7 @@ CATEGORICAL_KEYS = (
     "manufacturing_completed",
     "manufacturing_site",
     "production_line",
+    "work_shift",
     "patient_id",
     "vector_lot",
     "clinical_site",
@@ -670,6 +671,8 @@ def site_b_phf(rng: np.random.Generator, n: int = SITE_B_BATCHES) -> pd.DataFram
     df[c("site_b_site_code")] = v("site_b_site_code_value")  # mapped to nothing: dropped
     df[c("batch_type")] = v("type_clinical")  # a correction forces this to the commercial type
     df[c("manufacturing_site")] = f"{names.site('b')} plant"
+    # Site B records the work shift: most batches on the day shift, its last six at night.
+    df[c("work_shift")] = np.where(np.arange(len(df)) < len(df) - 6, "Day", "Night")
     df[c("disposition")] = _cycle([v("released"), v("discarded")], n)  # a level A never uses
     df[c("pre_activation_clumps_yn")] = _cycle(["Y", "N", None], n)
     df[c("cells_per_bag")] = rng.uniform(3e12, 7e12, n).round(0)
@@ -938,7 +941,7 @@ ROLES = {
     "Context / design factor": (
         "manufacturing_site",
         "production_line",
-        "production_line",
+        "work_shift",
         "clinical_site",
         "clinical_site_id",
         "country",

@@ -562,7 +562,7 @@ def _dates_help(run: BuildRun) -> dict | None:
                 "#### Reading the report\n\n"
                 "The report is about one site (config.yaml's site:) and puts every date column "
                 "on one timeline: what comes after what, on which day, and at what time of "
-                "day. It works per manufacturing site and production line (the vocabulary's "
+                "day. It works per manufacturing site, production line and shift (the vocabulary's "
                 "optional `production_line` column splits a site where it has a value): pick "
                 "one in the sidebar, and both sections show it. Hover a grey dot for its "
                 "batch.\n\n"
@@ -1167,8 +1167,9 @@ def build_dates_payload(run: BuildRun) -> dict[str, Any]:
     return {
         "title": "Batch table dates",
         "lead": f"Every date column of {' and '.join(run.merge.site_rows)} on one timeline, per "
-        "manufacturing site and production line: what comes after what, on which day, and at "
-        "what time of day. `ml task new` leaves every date column out of a new task. "
+        "subsite (manufacturing site, production line, shift): what comes after what, on "
+        "which day, and at what time of day. `ml task new` leaves every date column out of a "
+        "new task. "
         + (found or "No date columns")
         + "."
         + (" Batches described — " + "; ".join(cohorts) + "." if cohorts else ""),

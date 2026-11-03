@@ -77,10 +77,19 @@ name:
 | `sheet` | `phf_site_a` | the worksheet a source's data is on |
 
 `src/ml/names.py` lists every key the code uses, with what it means. A
-vocabulary that leaves a key out is refused, naming the key. One key is optional:
-`production_line` (kind `column`), the column that splits a manufacturing site into
-its production lines. With it, the dates and shifts reports work per site and line;
-without it, per site. `vocabulary.csv`
+vocabulary that leaves a key out is refused, naming the key. Two keys are optional,
+both of kind `column`, and split a manufacturing site into **subsites** for the dates
+and shifts reports, in this order:
+
+| Key | The column that … |
+|---|---|
+| `production_line` | names a site's production line or train (blank where a site has none) |
+| `work_shift` | names the work shift, splitting sites and their lines further |
+
+A batch's subsite is its manufacturing site and every one of these it has a value
+in: *Plant · Train A · Night*; a blank skips its level. Without a key, or without its
+column in the batch records, the build warns, names the fix, and does without that
+split; its log lists every subsite with its batches. `vocabulary.csv`
 in this repository is a copy of the `Names` sheet for reference.
 
 ## Step 4: known corrections

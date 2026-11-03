@@ -169,3 +169,39 @@ def test_the_shifts_run_per_manufacturing_site_and_production_line():
         "date",
     )
     assert set(found) == {"North", "South"}
+
+
+def test_subsites_split_by_line_then_shift_and_say_what_they_could_not_use(caplog):
+    plant = names.col("manufacturing_site")
+    line = names.optional_col("production_line")
+    shift = names.optional_col("work_shift")
+    frame = _lots().rename(columns={"id": "Patient Lot/Batch #"})
+    frame[plant] = "P1"
+    frame[line] = ["A"] * 100 + [""] * 140  # a blank skips its level
+    frame[shift] = ["Day", "Night"] * 120
+    subsites = cli._subsites({"North": (frame, None)})
+    assert [(name, len(batches)) for name, batches, _, _ in subsites] == [
+        ("P1 · A · Day", 50),
+        ("P1 · A · Night", 50),
+        ("P1 · Day", 70),
+        ("P1 · Night", 70),
+    ]
+    assert "4 subsites for the shifts and dates reports" in caplog.text
+    # A split column the batch table lacks, or that is blank everywhere, is warned about.
+    caplog.clear()
+    subsites = cli._subsites({"North": (frame.drop(columns=shift).assign(**{line: None}), None)})
+    assert [name for name, *_ in subsites] == ["P1"]
+    assert f"'{line}' is blank in every batch" in caplog.text
+    assert f"The batch table has no '{shift}' column" in caplog.text
+
+
+def test_the_demo_sites_split_into_their_subsites(built):
+    for config, expected in (
+        ("config", {"Line A", "Line B"}),
+        ("config_b", {"Day", "Night"}),
+    ):
+        page = shared(built["directory"], built[config], "batch_table", "dates_report.html")
+        payload = stlite.read_payload(page.read_text(encoding="utf-8"))
+        (chooser,) = payload["sections"][0]["blocks"]
+        labels = [option["label"] for option in chooser["options"]]
+        assert {label.split(" · ")[-1] for label in labels} == expected, labels

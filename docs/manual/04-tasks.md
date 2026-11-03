@@ -106,7 +106,7 @@ catalog to read, the task gets the same rules as `exclude_by_catalog` instead. T
 catalog gains later is not on it; make the task again, or add the line.
 
 **Date columns are left out by default**, every one the latest build's
-`dates.xlsx` holds at any manufacturing site and production line: a model fitted on a date learns when a batch was made
+`dates.xlsx` holds at any subsite (manufacturing site, line and shift): a model fitted on a date learns when a batch was made
 ([chapter 2](02-monthly-update.md#5-read-the-dates-report)). The durations derived
 from them are numbers, and stay in. `--keep-dates` lists none:
 
@@ -125,7 +125,7 @@ To also leave out every parameter that runs in groups over time, as a lot does
 uv run ml task new tasks/car_expression_no_lots --target "Product CAR expression (%)" --exclude-shifting
 ```
 
-One also listed for another reason keeps both. It lists them from the latest build's `shifts.xlsx`, at any manufacturing site and production line,
+One also listed for another reason keeps both. It lists them from the latest build's `shifts.xlsx`, at any subsite (manufacturing site, line and shift),
 each with why, a group of parameters that change on the same days one after the
 other:
 
