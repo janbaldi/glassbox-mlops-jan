@@ -87,10 +87,12 @@ def test_the_build_writes_the_shifts_report_and_table_and_finds_the_demo_lots(bu
     payload = stlite.read_payload(page.read_text(encoding="utf-8"))
     viewer = payload["sections"][0]["blocks"][0]
     assert viewer["kind"] == "shift_viewer" and viewer["site_label"] == "Manufacturing site"
-    # Site A's own batches: its plant only.
-    assert {s["label"] for s in viewer["sites"]} == {f"{names.site('a')} plant"}
+    # Site A's own batches: its plant, split by its two production lines.
+    plant = f"{names.site('a')} plant"
+    assert {s["label"] for s in viewer["sites"]} == {f"{plant} · Line A"}, "line B is too small"
+    assert payload["site"] == names.site("a")
     for site in viewer["sites"]:
-        # The medium and cytokine lots change on the same days at both sites.
+        # The medium and cytokine lots change on the same days.
         assert {c("media_lot"), c("cytokine_lot")} in [set(g) for g in site["groups"].values()]
         grouped = {m for members in site["groups"].values() for m in members}
         for row in site["rows"]:
@@ -116,21 +118,22 @@ def test_a_new_task_can_leave_out_every_parameter_that_runs_in_groups(built, tmp
     excluded = dict(taskconfig.load(folder / "task.yaml").predictors.exclude)
     why = excluded[c("media_lot")]
     assert why.startswith("runs in groups over time: ") and why.count("changes with Shifting") == 1
-    assert f"at {names.site('a')} plant" in why and names.site("b") not in why
+    assert f"at {names.site('a')} plant · Line A" in why and names.site("b") not in why
     # Without the option, nothing that runs in groups is listed.
     plain = tmp_path / "plain"
     assert cli.main(["--config", config, "task", "new", str(plain)]) == 0
     assert c("media_lot") not in dict(taskconfig.load(plain / "task.yaml").predictors.exclude)
 
 
-def test_the_shifts_run_per_manufacturing_site():
+def test_the_shifts_run_per_manufacturing_site_and_production_line():
     plant = names.col("manufacturing_site")
+    line = names.optional_col("production_line")
     frame = _lots().rename(columns={"id": "Patient Lot/Batch #"})
     north, south = frame.iloc[:120].copy(), frame.iloc[120:].copy()
     north[plant] = ["P1"] * 60 + ["P2"] * 60
     south[plant] = "P2"
     cohorts = {"North": (north, None), "South": (south, None)}
-    found = cli._shifts_by_plant(cohorts, "date")
+    found = cli._shifts_by_subsite(cli._subsites(cohorts), "date")
     assert set(found) == {"P1", "P2"}
     p1, p2 = found["P1"][1], found["P2"][1]
     # P2 makes batches for both sources.
@@ -139,8 +142,23 @@ def test_the_shifts_run_per_manufacturing_site():
     # The register has no part in it: every parameter takes part.
     assert "lot" in p1.analysed and "lot" in p2.analysed
     assert all(g.name.endswith(" @ P2") for g in p2.groups)
-    # Without the column, each data source is one plant.
-    found = cli._shifts_by_plant(
-        {s: (b.drop(columns=plant), a) for s, (b, a) in cohorts.items()}, "date"
+    # A production line splits its plant further; batches without one stay with the plant.
+    north[line] = ["L1"] * 30 + [None] * 30 + ["L2"] * 60
+    subsites = cli._subsites({"North": (north, None), "South": (south, None)})
+    assert [(name, len(batches)) for name, batches, _, _ in subsites] == [
+        ("P1", 30),
+        ("P1 · L1", 30),
+        ("P2", 120),
+        ("P2 · L2", 60),
+    ]
+    # Without the plant column (nor the line), each data source is one plant.
+    found = cli._shifts_by_subsite(
+        cli._subsites(
+            {
+                s: (b.drop(columns=[plant, line], errors="ignore"), a)
+                for s, (b, a) in cohorts.items()
+            }
+        ),
+        "date",
     )
     assert set(found) == {"North", "South"}

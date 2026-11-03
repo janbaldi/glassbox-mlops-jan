@@ -77,7 +77,10 @@ name:
 | `sheet` | `phf_site_a` | the worksheet a source's data is on |
 
 `src/ml/names.py` lists every key the code uses, with what it means. A
-vocabulary that leaves a key out is refused, naming the key. `vocabulary.csv`
+vocabulary that leaves a key out is refused, naming the key. One key is optional:
+`production_line` (kind `column`), the column that splits a manufacturing site into
+its production lines. With it, the dates and shifts reports work per site and line;
+without it, per site. `vocabulary.csv`
 in this repository is a copy of the `Names` sheet for reference.
 
 ## Step 4: known corrections

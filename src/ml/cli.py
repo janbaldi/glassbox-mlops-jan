@@ -498,18 +498,20 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
         analysed, counted = _analysed_batches(batches, site, config)
         cohorts[site] = batches, analysed
         described[site] = "; ".join(filter(None, (cohort, counted)))
-    # The dates: every date column on one timeline.
+    # The manufacturing sites, split by production line where one is recorded: the dates and
+    # the shifts run per subsite, as a plant's process and its lots do.
+    subsites = _subsites(cohorts)
     dated_by_site = {}
-    for site, (batches, analysed) in cohorts.items():
+    for label, batches, counted, from_sources in subsites:
         rows, analysis = dates.for_build(
             batches,
             catalog_mapping,
             id_column="Patient Lot/Batch #",
             order_column=names.col(date_column),
-            analysed=analysed,
+            analysed=counted,
         )
-        analysis.cohort = described[site]
-        dated_by_site[site] = rows, analysis
+        analysis.cohort = f"{int(counted.sum()):,} batches from {', '.join(from_sources)}"
+        dated_by_site[label] = rows, analysis
     missing_by_site = {}
     for site, (batches, analysed) in cohorts.items():
         missing_by_site[site] = missingness.for_build(
@@ -535,7 +537,7 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
         )
         analysis.cohort = missing_by_site[site][1].cohort
         correlated_by_site[site] = rows, analysis
-    shifted_by_site = _shifts_by_plant(cohorts, names.col(date_column))
+    shifted_by_site = _shifts_by_subsite(subsites, names.col(date_column))
     register, register_note = _read_register(the_site, list(result.columns), config)
     decisions = screening.for_site(register.decisions, the_site) if register else []
     _show_register(decisions, the_site, missing_by_site, correlated_by_site)
@@ -683,15 +685,17 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
     return dict(uploaded)["report"]
 
 
-def _shifts_by_plant(
+def _subsites(
     cohorts: dict[str, tuple[pd.DataFrame, pd.Series | None]],
-    order_column: str,
-) -> dict[str, tuple[list[dict], Any]]:
-    """The shifts analysis per manufacturing site, over the missingness report's batches.
+) -> list[tuple[str, pd.DataFrame, pd.Series, list[str]]]:
+    """The batches the missingness report counts, per subsite: each manufacturing site, split
+    by its production line where the batch records one. Per subsite: its label, its batches,
+    which of them are counted (the others are only drawn elsewhere), and the data sources
+    they come from.
 
-    Time, and the lots, run per plant rather than per data source. Without the
-    column, each data source counts as one plant. The screening register has no
-    part in it.
+    Time, the lots and the process run per plant and line rather than per data source.
+    Without the plant column, each data source counts as one plant; without the line
+    column (or the vocabulary's ``production_line`` key), a plant is not split.
     """
     every = pd.concat([batches for batches, _ in cohorts.values()])
     counted = pd.concat(
@@ -699,30 +703,51 @@ def _shifts_by_plant(
             pd.Series(True, index=batches.index) if analysed is None else analysed
             for batches, analysed in cohorts.values()
         ]
-    )
+    ).astype(bool)
     source = pd.concat([pd.Series(site, index=b.index) for site, (b, _) in cohorts.items()])
     column = names.col("manufacturing_site")
     if column in every.columns:
-        plant = every[column].astype("string").str.strip()
+        label = every[column].astype("string").str.strip()
     else:
-        log.warn(MODULE, f"No '{column}' column: the shifts report splits by data source instead")
-        plant = source
-    if plant.isna().any():
-        log.warn(MODULE, f"{int(plant.isna().sum()):,} batches have no {column}: not in the shifts")
+        log.warn(MODULE, f"No '{column}' column: the subsites are the data sources instead")
+        label = source.astype("string")
+    line = names.optional_col("production_line")
+    if line and line in every.columns:
+        value = every[line].astype("string").str.strip().replace("", pd.NA)
+        label = label.where(value.isna(), label + " · " + value)
+        split = sorted(set(label[value.notna()].dropna()))
+        log.info(MODULE, f"{len(split)} subsites split by {line}", ", ".join(split))
+    elif line:
+        log.info(MODULE, f"No '{line}' column: the plants are not split by production line")
+    if label.isna().any():
+        log.warn(
+            MODULE,
+            f"{int(label.isna().sum()):,} batches have no {column}: not in the shifts or dates",
+        )
+    out = []
+    for name in sorted(label.dropna().unique()):
+        here = (label == name).fillna(False).astype(bool)
+        out.append((str(name), every[here], counted[here], sorted(set(source[here]))))
+    return out
+
+
+def _shifts_by_subsite(
+    subsites: list[tuple[str, pd.DataFrame, pd.Series, list[str]]], order_column: str
+) -> dict[str, tuple[list[dict], Any]]:
+    """The shifts analysis per subsite (:func:`_subsites`). The screening register has no
+    part in it."""
     out = {}
-    for name in sorted(plant.dropna().unique()):
-        here = (plant == name).fillna(False).astype(bool)
-        sources = sorted(set(source[here]))
+    for name, batches, counted, sources in subsites:
         rows, found = shifts.for_build(
-            every[here],
+            batches,
             id_column="Patient Lot/Batch #",
             order_column=order_column,
-            analysed=counted[here],
-            label=str(name),
+            analysed=counted,
+            label=name,
         )
         found.sources = sources
-        found.cohort = f"{int(counted[here].sum()):,} batches from {', '.join(sources)}"
-        out[str(name)] = rows, found
+        found.cohort = f"{int(counted.sum()):,} batches from {', '.join(sources)}"
+        out[name] = rows, found
     return out
 
 
@@ -756,14 +781,16 @@ def _write_dates(
     content_digest: str,
     run_start: datetime,
 ) -> Path:
-    """Every date column per site (what ``ml task new`` leaves out), and each batch's place
-    of every column on the timeline."""
+    """Every date column per subsite (what ``ml task new`` leaves out, at any of them), and
+    each batch's place of every column on its subsite's timeline."""
     sheets = {
         screening.EVIDENCE_SHEET: [
-            {"Site": site, **row} for site, (rows, _) in dated_by_site.items() for row in rows
+            {"Manufacturing site": site, **row}
+            for site, (rows, _) in dated_by_site.items()
+            for row in rows
         ],
         "Days": [
-            {"Site": site, **row}
+            {"Manufacturing site": site, **row}
             for site, (_, a) in dated_by_site.items()
             for row in dates.day_rows(a)
         ],
@@ -1309,8 +1336,8 @@ def _shifting_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[st
 
 
 def _dates_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[str, str]], str]:
-    """Every date column the latest build found at the site, with why, for a new task file;
-    and when that build ran. Without a build to read, a warning and nothing."""
+    """Every date column the latest build found at any subsite of the site, with why, for a
+    new task file; and when that build ran. Without a build to read, a warning and nothing."""
     if not config:
         log.warn(
             MODULE, "No config.yaml found: the new task file lists no date columns to leave out"
@@ -1332,19 +1359,21 @@ def _dates_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[str, 
     built = dict(zip(about["Item"].astype(str), about["Value"].astype(str))).get("Built", "")
     if found.empty:
         return [], built
-    here = found[found["Site"] == workspace.site_name(config)].fillna("")
+    # A column is a date at one subsite or more: left out of the task, whatever the subsite.
+    kinds: dict[str, list[str]] = {}
+    places: dict[str, list[str]] = {}
+    for row in found.fillna("").to_dict("records"):
+        kinds.setdefault(row["Parameter"], [])
+        if row["Kind"] not in kinds[row["Parameter"]]:
+            kinds[row["Parameter"]].append(row["Kind"])
+        places.setdefault(row["Parameter"], []).append(str(row["Manufacturing site"]))
     return [
         (
-            row["Parameter"],
-            f"a date ({row['Kind']}"
-            + (
-                f", position {int(row['Position'])} on the timeline"
-                if row["Position"] != ""
-                else ""
-            )
-            + "): a model would learn when a batch was made",
+            parameter,
+            f"a date ({', '.join(kinds[parameter])}; at {', '.join(places[parameter])}): a "
+            "model would learn when a batch was made",
         )
-        for row in here.to_dict("records")
+        for parameter in kinds
     ], built
 
 

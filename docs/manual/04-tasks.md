@@ -96,8 +96,8 @@ catalog's exactly: a value no catalog row has matches nothing, and the run warns
 about it, with the values the catalog does have. A catalog without a *Variable
 Role* column refuses the run: delete the block, or add the column.
 
-**Date columns are left out by default**, read from the latest build's
-`dates.xlsx`: a model fitted on a date learns when a batch was made
+**Date columns are left out by default**, every one the latest build's
+`dates.xlsx` holds at any manufacturing site and production line: a model fitted on a date learns when a batch was made
 ([chapter 2](02-monthly-update.md#5-read-the-dates-report)). The durations derived
 from them are numbers, and stay in. `--keep-dates` lists none:
 
@@ -105,7 +105,7 @@ from them are numbers, and stay in. `--keep-dates` lists none:
     # Dates and times at this site, as the build of 2026-10-21 14:03 found them
     # (dates_report.html): a model would learn when a batch was made. The durations
     # derived from them stay usable. Delete a line to use the date again.
-    - {column: "Day 3 incubator out", reason: "a date (date and time, position 5 on the timeline): a model would learn when a batch was made"}
+    - {column: "Day 3 incubator out", reason: "a date (date and time; at Northfield plant · Line A): a model would learn when a batch was made"}
 ```
 
 To also leave out every parameter that runs in groups over time, as a lot does
@@ -116,7 +116,7 @@ To also leave out every parameter that runs in groups over time, as a lot does
 uv run ml task new tasks/car_expression_no_lots --target "Product CAR expression (%)" --exclude-shifting
 ```
 
-One already listed as screened or as a date is listed once. It lists them from the latest build's `shifts.xlsx`, at any manufacturing site,
+One already listed as screened or as a date is listed once. It lists them from the latest build's `shifts.xlsx`, at any manufacturing site and production line,
 each with why, a group of parameters that change on the same days one after the
 other:
 

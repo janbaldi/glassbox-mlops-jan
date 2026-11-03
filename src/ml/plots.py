@@ -442,8 +442,6 @@ def missing_by_category(group) -> Block | None:
 # ---------------------------------------------------------------------------
 # The dates report
 # ---------------------------------------------------------------------------
-#: Sequential, light to dark, one hue: a share from 0 to 1.
-SEQUENTIAL_BLUE = [[0.0, "#f4f6f8"], [0.5, "#86b6ef"], [1.0, "#104281"]]
 #: A light band behind every other calendar day.
 DAY_BAND = "rgba(44,62,80,0.05)"
 
@@ -585,42 +583,6 @@ def date_timeline(report) -> Block | None:
     )
 
 
-def date_days(report) -> Block | None:
-    """Which calendar day after the anchor each column falls on, as a share of its batches."""
-    if not report.on_day:
-        return None
-    names = [_short(c) for c in report.order]
-    width = len(next(iter(report.on_day.values())))
-    days = [report.first_day + d for d in range(width)]
-    z = [[100 * v if v else None for v in report.on_day[c]] for c in report.order]
-    figure_ = go.Figure(
-        go.Heatmap(
-            z=z,
-            x=[f"day {d}" for d in days],
-            y=names,
-            colorscale=SEQUENTIAL_BLUE,
-            zmin=0,
-            zmax=100,
-            colorbar=dict(title="%", thickness=10),
-            text=[["" if v is None else f"{v:.0f}" for v in row] for row in z],
-            texttemplate="%{text}" if len(names) * width <= 400 else None,
-            hovertemplate="%{y} on %{x}: %{z:.0f}% of its batches<extra></extra>",
-            xgap=2,
-            ygap=2,
-        )
-    )
-    figure_ = _style(
-        figure_, "On which day each column falls", height=max(300, 30 * len(names) + 140)
-    )
-    figure_.update_yaxes(autorange="reversed", showgrid=False)
-    figure_.update_xaxes(tickangle=0 if width <= 16 else -45)
-    return _fig(
-        figure_,
-        "The share of a column's batches on each calendar day after the anchor's. A column on "
-        "one day is one dark cell; a column spread over several days has no fixed day.",
-    )
-
-
 def _hhmm(hours: float) -> str:
     minutes = int(round(hours * 60)) % (24 * 60)
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
@@ -630,9 +592,14 @@ def date_clock(report) -> Block | None:
     """The time of day of every column with one: shifts, nights, and steps done any time.
     The hours come unwrapped (a step done around midnight runs past 24), as the report keeps
     them."""
-    columns = [c for c in report.order if c in report.clock] + [
-        c for c in report.clock if c not in report.order
-    ]
+    # Earliest median time of day at the top. The hours are unwrapped, so a step done around
+    # midnight sorts by its evening start rather than by the small hours.
+    medians = {
+        c: float(np.median(present))
+        for c, values in report.clock.items()
+        if (present := [v for v in values if v is not None])
+    }
+    columns = sorted(medians, key=lambda c: (medians[c], c))
     if not columns:
         return None
     figure_ = go.Figure()
@@ -677,13 +644,17 @@ def date_clock(report) -> Block | None:
     )
     figure_.update_yaxes(
         tickvals=list(range(len(columns))),
-        ticktext=[_short(c) + (" (time only)" if c not in report.order else "") for c in columns],
+        ticktext=[
+            _short(c) + (" (time only)" if report.kinds.get(c) == "time of day only" else "")
+            for c in columns
+        ],
         autorange="reversed",
         showgrid=False,
     )
     figure_.update_xaxes(tickvals=values, ticktext=labels, showgrid=True, gridcolor=GRID)
     return _fig(
         figure_,
-        "Clock time, the shaded hours between 20:00 and 06:00. A column done around midnight is "
-        "drawn across it rather than split at 00:00. Time-of-day-only columns are at the bottom.",
+        "Clock time, earliest median at the top; the shaded hours are 20:00 to 06:00. A column "
+        "done around midnight is drawn across it rather than split at 00:00. *(time only)* marks "
+        "a column that holds a time of day with no date.",
     )

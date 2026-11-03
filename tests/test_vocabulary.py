@@ -120,3 +120,15 @@ def test_the_shipped_config_and_template_name_no_column(built):
     for name in (names.col("pre_activation_clumps_yn"), names.col("excluded_mapping_row")):
         assert name not in text and name not in template
     assert Path(SOURCE / "templates" / "corrections.yaml").exists() is False
+
+
+def test_the_production_line_key_is_optional():
+    vocabulary = names.demo()
+    vocabulary.entries("column").pop("production_line")
+    assert not any("production_line" in line for line in vocabulary.missing())
+    try:
+        names.use(vocabulary)
+        assert names.optional_col("production_line") is None
+    finally:
+        names.use(names.demo())
+    assert names.optional_col("production_line") == names.COLUMNS["production_line"]

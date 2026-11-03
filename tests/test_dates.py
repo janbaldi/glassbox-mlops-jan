@@ -124,7 +124,7 @@ def test_too_few_values_keep_a_column_off_the_timeline_and_nothing_breaks():
     assert report.order == [] and report.phases == []
     assert {r["Parameter"] for r in rows} >= {"start", "seed"}
     assert all(r["Off the timeline because"] for r in rows)
-    for draw in (plots.date_timeline, plots.date_days):
+    for draw in (plots.date_timeline,):
         assert draw(report) is None
     _, empty = dates.for_build(pd.DataFrame({"key": ["a"], "x": [1.0]}), {}, "key", "start")
     assert empty.kinds == {} and plots.date_clock(empty) is None
@@ -132,7 +132,7 @@ def test_too_few_values_keep_a_column_off_the_timeline_and_nothing_breaks():
 
 def test_the_figures_draw_every_batch_light_enough_for_thousands():
     _, report = _found()
-    for draw in (plots.date_timeline, plots.date_days, plots.date_clock):
+    for draw in (plots.date_timeline, plots.date_clock):
         block = draw(report)
         assert block["kind"] == "figure" and block["spec"]["data"], draw.__name__
     timeline = plots.date_timeline(report)["spec"]["data"]
@@ -149,6 +149,14 @@ def test_the_figures_draw_every_batch_light_enough_for_thousands():
     assert len(timeline) == len(report.order) + 3
     clock = plots.date_clock(report)["spec"]["data"]
     assert len(clock) == len(report.clock) + 3
+    # The time of day is ordered by median, earliest at the top.
+    rows = plots.date_clock(report)["spec"]["layout"]["yaxis"]["ticktext"]
+    medians = [
+        float(np.median([v for v in report.clock[c] if v is not None]))
+        for c in (t.removesuffix(" (time only)") for t in rows)
+    ]
+    assert medians == sorted(medians) and rows[0] == "thaw (time only)"
+    assert rows[-1] == "night sample"
 
 
 # ---------------------------------------------------------------------------
@@ -163,10 +171,24 @@ def test_the_build_writes_the_dates_report_and_table(built):
         "The time of day",
         "Provenance",
     ]
+    # The site in the sidebar; one picker over its manufacturing sites and lines, which
+    # every section follows.
+    assert payload["site"] == names.site("a")
+    plant = f"{names.site('a')} plant"
+    for section in payload["sections"][:2]:
+        (chooser,) = section["blocks"]
+        assert chooser["kind"] == "site_chooser" and chooser["group"] == "subsite"
+        assert [o["label"] for o in chooser["options"]] == [
+            f"{plant} · Line A",
+            f"{plant} · Line B",
+        ]
+    timeline = payload["sections"][0]["blocks"][0]["options"]
+    assert timeline[0]["blocks"][0]["kind"] == "figure"
+    assert timeline[1]["blocks"][0]["text"].startswith("No date column has 20 values")
     book = pd.ExcelFile(folder / "dates.xlsx")
     assert {"Days", screening.ABOUT_SHEET} <= set(book.sheet_names)
     table = pd.read_excel(book, sheet_name=screening.EVIDENCE_SHEET)
-    assert set(table["Site"]) == {names.site("a")}
+    assert set(table["Manufacturing site"]) == {f"{plant} · Line A", f"{plant} · Line B"}
     assert names.col("date_start") in set(table["Parameter"])
     order = list(cli.BUILD_OUTPUTS)
     assert order.index("dates report") < order.index("missingness report")
@@ -186,6 +208,8 @@ def test_a_new_task_leaves_out_every_date_column(built, tmp_path):
     assert found <= set(excluded)
     dated = {p for p, why in excluded.items() if why.startswith("a date (")}
     assert dated and dated <= found
+    # A date at any subsite is left out, and the reason says where.
+    assert "Line A" in excluded[names.col("date_start")]
     kept = tmp_path / "kept"
     assert cli.main(["--config", config, "task", "new", str(kept), "--keep-dates"]) == 0
     reasons = dict(taskconfig.load(kept / "task.yaml").predictors.exclude).values()

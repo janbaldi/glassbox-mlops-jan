@@ -48,6 +48,9 @@ COLUMNS: dict[str, str | tuple[str, ...]] = {
     "batch_type": "Batch kind",
     "manufacturing_completed": "Manufacturing finished?",
     "manufacturing_site": "Plant",
+    # Optional: splits a manufacturing site into its production lines, for the shifts and
+    # dates reports. A vocabulary without it splits by site only.
+    "production_line": "Production line",
     "pt_cd4_pct": "Thawed CD4 share (%)",
     "pt_cd8_pct": "Thawed CD8 share (%)",
     "pt_cd3_pct": "Thawed CD3 share (%)",
@@ -314,6 +317,8 @@ SHEETS: dict[str, str | int] = {
 
 
 _REGISTRIES = {"column": COLUMNS, "value": VALUES, "site": SITES, "sheet": SHEETS}
+#: Column keys a vocabulary may leave out; the code that uses them does without.
+OPTIONAL_COLUMNS = frozenset({"production_line"})
 
 
 @dataclass
@@ -341,7 +346,7 @@ class Vocabulary:
             for kind, registry in _REGISTRIES.items()
             if kind != "sheet"
             for key in registry
-            if key not in self.entries(kind)
+            if key not in self.entries(kind) and not (kind == "column" and key in OPTIONAL_COLUMNS)
         ]
 
     def names(self) -> list[str]:
@@ -453,6 +458,14 @@ def col(key: str, **placeholders: Any) -> str:
     if isinstance(name, tuple):
         raise KeyError(f"'{key}' is a list of columns; use cols()")
     return name.format(**placeholders) if placeholders else name
+
+
+def optional_col(key: str) -> str | None:
+    """The column an optional key stands for, or None when the vocabulary leaves it out."""
+    if key not in OPTIONAL_COLUMNS:
+        raise KeyError(f"'{key}' is not an optional column key")
+    found = current().entries("column").get(key)
+    return None if found is None or isinstance(found, tuple) else found
 
 
 def cols(key: str) -> tuple[str, ...]:

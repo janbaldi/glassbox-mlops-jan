@@ -104,9 +104,13 @@ and 10 to 30 seconds to start. Look at these sections:
 
 ## 5. Read the dates report
 
-Open `dates_report.html`. It puts every **date and time column** of the site on one
-timeline: what comes after what, on which day, and at what time of day. It
-describes the same batches as the missingness report. Nothing here needs a decision:
+Open `dates_report.html`. It puts every **date and time column** on one timeline:
+what comes after what, on which day, and at what time of day. It works **per
+manufacturing site and production line** (a *subsite*: the line splits a site where
+the vocabulary's `production_line` column has a value), over the batches the
+missingness report counts in its statistics. The sidebar names the site and picks the
+subsite; both sections follow it. A subsite with fewer than 20 batches with a date
+says so. Nothing here needs a decision:
 `ml task new` leaves every date column out of a new task anyway (a model fitted on a
 date learns when a batch was made; [chapter 4](04-tasks.md#1-create-a-task)). The
 durations the build derives from the dates are numbers, and stay usable.
@@ -116,19 +120,17 @@ calendar day, *day 3* the third calendar day after it, whatever the hour.
 
 - **The timeline.** Every column in the order the process runs in, every batch a grey
   dot (hover for the batch), the bar the middle half of the batches and the ringed dot
-  the median, with the calendar days as bands. The phases table names what happens
-  on each day, and the heatmap gives, per column, the share of its batches on each
-  day: a column named *Day 3 …* that is mostly on day 0 shows at once, and so does a
-  step that moved from one day to the next.
-- **The time of day.** Each column's clock time, read round the clock (a step done
-  around midnight is drawn across it), with the night hours shaded; the
-  time-of-day-only columns are here too.
+  the median, with the calendar days as bands: a column named *Day 3 …* that sits on
+  day 0 shows at once. The phases table names what happens on each day.
+- **The time of day.** Each column's clock time, earliest median at the top, read
+  round the clock (a step done around midnight is drawn across it), with the night
+  hours shaded; the time-of-day-only columns are here too.
 
 A date shared by batches started weeks apart (a vector's manufacture date) is the
 date of a lot or a material, not of the batch, and is kept off the timeline.
-`dates.xlsx` holds every date column (usual day, spread, wait since the column
-before it, time of day, weekend share, first and last recorded, drift) and each
-batch's place of every column, in days.
+`dates.xlsx` holds every date column per subsite (usual day, spread, wait since the
+column before it, time of day, weekend share, first and last recorded, drift) and
+each batch's place of every column, in days.
 
 ## 6. Read the missingness report
 
@@ -246,10 +248,11 @@ such a parameter as a stand-in for time. The report also groups the parameters
 that **change on the same days**, since they say the same thing: which lot a
 batch was made with.
 
-It works **per manufacturing site** (the `Manufacturing Site` column) within the
-site's batches, since time and the lots run per plant, over the batches the
-missingness report counts in its statistics; with one plant, the sidebar just
-names it. Dates count by the day: the batches
+It works **per manufacturing site and production line** (the `Manufacturing Site`
+column, split further by the vocabulary's `production_line` column where it has a
+value) within the site's batches, since time and the lots run per plant and line,
+over the batches the missingness report counts in its statistics. The sidebar names
+the site, and picks the subsite (or names it, when there is one). Dates count by the day: the batches
 of one day have no order, and on the day a lot changes some of them can have the
 old lot and some the new one; that day ends the old lot's group and starts the
 new one's.

@@ -195,6 +195,7 @@ RATIO_KEYS = ("pt_cd4_cd8_ratio",)
 CATEGORICAL_KEYS = (
     "manufacturing_completed",
     "manufacturing_site",
+    "production_line",
     "patient_id",
     "vector_lot",
     "clinical_site",
@@ -621,6 +622,9 @@ def site_a_phf(rng: np.random.Generator, n: int = SITE_A_BATCHES) -> pd.DataFram
     df[c("country")] = _cycle(vs("countries_a"), n)
     df[c("batch_type")] = _cycle([v("type_commercial")] * 9 + [v("type_clinical")], n)
     df[c("manufacturing_site")] = f"{names.site('a')} plant"  # the shifts report's split
+    # Site A's plant runs a second production line for its last ten batches: the shifts and
+    # dates reports split the plant by them (and line B has too few batches to judge).
+    df[c("production_line")] = np.where(np.arange(len(df)) < len(df) - 10, "Line A", "Line B")
     df[c("disposition")] = _cycle([v("released"), v("rejected")], n)
     df[c("pre_activation_clumps_yn")] = _cycle(["Yes", "No", None, "Yes"], n)
     df[c("seeding_density_a")] = rng.uniform(4e11, 6e11, n).round(0)
@@ -933,6 +937,8 @@ ROLES = {
     "Equipment ID": ("incubator_id",),
     "Context / design factor": (
         "manufacturing_site",
+        "production_line",
+        "production_line",
         "clinical_site",
         "clinical_site_id",
         "country",

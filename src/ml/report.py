@@ -493,37 +493,62 @@ def _missingness_help(run: BuildRun) -> dict | None:
     }
 
 
-def _date_sections(site: str, analysis: Any, many: bool) -> list[dict | None]:
-    """One site's sections of the dates report: the timeline, and the time of day."""
-    tag = f"{site}: " if many else ""
-    slug = "-" + site.lower().replace(" ", "-") if many else ""
-    phases = [
-        [
-            f"day {day}",
-            " → ".join(columns),
-            dates.day_text(analysis.quantiles[columns[0]][2]),
-            dates.day_text(analysis.quantiles[columns[-1]][2]),
-        ]
-        for day, columns in analysis.phases
-    ]
-    return [
-        _section(
-            f"timeline{slug}",
-            f"{tag}The timeline",
+#: The sidebar picker the dates and shifts reports share their subsites by.
+SUBSITE_LABEL = "Manufacturing site"
+
+
+def _subsite_chooser(options: list[tuple[str, list]]) -> Block | None:
+    """One subsite's blocks at a time, picked in the sidebar. Every chooser of a report shares
+    the one picker, so all its sections show the same subsite."""
+    kept = [{"label": label, "blocks": clean(blocks)} for label, blocks in options]
+    kept = [option for option in kept if option["blocks"]]
+    if not kept:
+        return None
+    return {"kind": "site_chooser", "label": SUBSITE_LABEL, "group": "subsite", "options": kept}
+
+
+def _date_sections(run: BuildRun) -> list[dict | None]:
+    """The dates report's sections, the timeline and the time of day, each over every
+    subsite, one shown at a time."""
+    timeline, clock = [], []
+    for label, (_, analysis) in run.dates.items():
+        phases = [
             [
-                plots.date_timeline(analysis),
-                sortable(
-                    ["Phase", "Columns, in order", "From", "To"],
-                    phases,
-                    note="Columns next to each other in the order with the same usual day: what "
-                    "the process does on that day, from the first column's median to the last's.",
+                f"day {day}",
+                " → ".join(columns),
+                dates.day_text(analysis.quantiles[columns[0]][2]),
+                dates.day_text(analysis.quantiles[columns[-1]][2]),
+            ]
+            for day, columns in analysis.phases
+        ]
+        none = md(f"No date column has {dates.MIN_VALUES} values at {label}.")
+        timeline.append(
+            (
+                label,
+                clean(
+                    [
+                        plots.date_timeline(analysis),
+                        sortable(
+                            ["Phase", "Columns, in order", "From", "To"],
+                            phases,
+                            note="Columns next to each other in the order with the same usual "
+                            "day: what the process does on that day, from the first column's "
+                            "median to the last's.",
+                        )
+                        if phases
+                        else None,
+                    ]
                 )
-                if phases
-                else None,
-                plots.date_days(analysis),
-            ],
-        ),
-        _section(f"clock{slug}", f"{tag}The time of day", [plots.date_clock(analysis)]),
+                or [none],
+            )
+        )
+        clock.append(
+            (label, clean([plots.date_clock(analysis)]) or [md(f"No time of day at {label}.")])
+        )
+    empty = md(f"No date column has {dates.MIN_VALUES} values at any manufacturing site.")
+    return [
+        _section("timeline", "The timeline", [_subsite_chooser(timeline) or empty]),
+        _section("clock", "The time of day", [_subsite_chooser(clock) or empty]),
     ]
 
 
@@ -537,7 +562,10 @@ def _dates_help(run: BuildRun) -> dict | None:
                 "#### Reading the report\n\n"
                 "The report is about one site (config.yaml's site:) and puts every date column "
                 "on one timeline: what comes after what, on which day, and at what time of "
-                "day. Hover a grey dot for its batch.\n\n"
+                "day. It works per manufacturing site and production line (the vocabulary's "
+                "optional `production_line` column splits a site where it has a value): pick "
+                "one in the sidebar, and both sections show it. Hover a grey dot for its "
+                "batch.\n\n"
                 "#### Dates are not predictors\n\n"
                 "A model fitted on a date learns when a batch was made, and says nothing about "
                 "a batch made later. `ml task new` leaves every date column out of a new task, "
@@ -1128,28 +1156,24 @@ def build_batch_table_payload(run: BuildRun) -> dict[str, Any]:
 
 
 def build_dates_payload(run: BuildRun) -> dict[str, Any]:
-    """The build's dates report: every date column on one timeline, and all it shows."""
-    many = len(run.dates) > 1
-    sections = [
-        section
-        for site, (_, analysis) in run.dates.items()
-        for section in _date_sections(site, analysis, many)
-    ] + [_provenance(run)]
+    """The build's dates report: every date column on one timeline, per subsite."""
+    sections = _date_sections(run) + [_provenance(run)]
     found = "; ".join(
-        f"{site}: {len(a.kinds)} date columns, {len(a.order)} on the timeline in "
+        f"{label}: {len(a.kinds)} date columns, {len(a.order)} on the timeline in "
         f"{len(a.phases)} phases"
-        for site, (_, a) in run.dates.items()
+        for label, (_, a) in run.dates.items()
     )
-    cohorts = [f"{site}: {a.cohort}" for site, (_, a) in run.dates.items() if a.cohort]
+    cohorts = [f"{label}: {a.cohort}" for label, (_, a) in run.dates.items() if a.cohort]
     return {
         "title": "Batch table dates",
-        "lead": f"Every date column of {' and '.join(run.merge.site_rows)} on one timeline: what "
-        "comes after what, on which day, and at what time of day. `ml task new` leaves every "
-        "date column out of a new task. "
+        "lead": f"Every date column of {' and '.join(run.merge.site_rows)} on one timeline, per "
+        "manufacturing site and production line: what comes after what, on which day, and at "
+        "what time of day. `ml task new` leaves every date column out of a new task. "
         + (found or "No date columns")
         + "."
         + (" Batches described — " + "; ".join(cohorts) + "." if cohorts else ""),
         "subtitle": f"CAR-T manufacturing data · run {run.run_start.strftime('%Y-%m-%d %H:%M')}",
+        "site": " and ".join(run.merge.site_rows),
         "sections": [section for section in sections if section],
         "help": _dates_help(run),
         "compact": True,
@@ -1231,11 +1255,12 @@ def build_shifts_payload(run: BuildRun) -> dict[str, Any]:
         _shift_viewer(run),
         "Batch table shifts",
         "Which parameters keep one value for a stretch of days and then change to another, as "
-        "a lot does, and which change on the same days, per manufacturing site. "
+        "a lot does, and which change on the same days, per manufacturing site and production "
+        "line. "
         "`ml task new --exclude-shifting` leaves them all out of a task. Parameters that run "
         f"in groups — {tested}.",
         _shifts_help(run),
-    )
+    ) | {"site": " and ".join(run.merge.site_rows)}
 
 
 def write(payload: dict[str, Any], output_path: str | Path) -> Path:

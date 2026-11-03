@@ -816,6 +816,23 @@ def render_timeline(segments: dict, drawn: list, key: str) -> None:
     st.plotly_chart(figure, width="stretch", key=f"timeline{key}")
 
 
+#: Per picker group, the subsite picked this run: every chooser of a group shows the same one.
+PICKED: dict = {}
+
+
+def render_site_chooser(block: dict, key: str) -> None:
+    """One subsite's blocks, picked in the sidebar. The first chooser of a group draws the
+    picker; the others follow it."""
+    labels = [option["label"] for option in block["options"]]
+    group = block.get("group") or key
+    if group not in PICKED:
+        PICKED[group] = _pick_site(block["label"], labels, group)
+    chosen = PICKED[group] if PICKED[group] in labels else labels[0]
+    option = block["options"][labels.index(chosen)]
+    for i, child in enumerate(option["blocks"]):
+        render_block(child, f"{key}-{labels.index(chosen)}-{i}")
+
+
 def render_shift_viewer(block: dict, key: str) -> None:
     """The groups over time of the row clicked; below, the groups and parameters to click."""
     labels = [site["label"] for site in block["sites"]]
@@ -930,6 +947,8 @@ def render_block(block: dict, key: str) -> None:
         render_missing_viewer(block, key)
     elif kind == "shift_viewer":
         render_shift_viewer(block, key)
+    elif kind == "site_chooser":
+        render_site_chooser(block, key)
     elif kind == "chooser":
         labels = [option["label"] for option in block["options"]]
         chosen = st.selectbox(block["label"], labels, key=f"pick{key}")
@@ -1118,6 +1137,10 @@ def report_page() -> None:
     compact = PAYLOAD.get("compact", False)
     with st.sidebar:
         SLOTS["site"] = st.container()
+        if PAYLOAD.get("site"):
+            # The data site, above the picker of its manufacturing sites and lines.
+            with SLOTS["site"]:
+                st.markdown(f"**Site:** {html.escape(PAYLOAD['site'])}")
         if compact and PAYLOAD.get("lead"):
             with st.popover("About this report", icon=":material/info:", width="stretch"):
                 st.markdown(PAYLOAD["lead"])
