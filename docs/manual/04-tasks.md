@@ -73,28 +73,36 @@ itself. If a decision is later reinstated, the run warns that the task still
 excludes the parameter: delete the line to use it again. A line for a site your
 task doesn't use can be deleted too.
 
-**Some catalog roles are left out by default.** Every new `task.yaml` leaves out each
-parameter whose catalog **Variable Role** says it cannot explain how a batch turned
-out, or is only known at or after release:
+**Some catalog roles and functions are left out by default.** `ml task new` reads the
+catalog and lists, one line each, every parameter whose catalog **Variable Role** or
+**Functional Type** says it cannot explain how a batch turned out, or is known only at
+or after release:
+
+| Catalog column | Values left out |
+|---|---|
+| Variable Role | Identifier, Timestamp, Context / design factor, CQA / release result, Disposition label, Equipment ID, Material lot ID, Post-release logistics, Setpoint / plan |
+| Functional Type | Formulation and dose, Quality and disposition |
+
+Each group is a comment, so `task.yaml` shows every parameter it leaves out, and
+by elimination every one it keeps:
 
 ```yaml
-  exclude_by_catalog:              # {catalog column: [values left out]}
-    Variable Role:
-      - "Identifier"
-      - "Timestamp"
-      - "Context / design factor"
-      - "CQA / release result"
-      - "Disposition label"
-      - "Equipment ID"
-      - "Material lot ID"
-      - "Post-release logistics"
-      - "Setpoint / plan"
+    # Catalog Variable Role: Identifier (2 parameters)
+    - {column: "Patient Lot/Batch #", reason: "catalog Variable Role is 'Identifier'"}
+    - {column: "Patient code", reason: "catalog Variable Role is 'Identifier'"}
+    # Catalog Functional Type: Formulation and dose (6 parameters)
+    - {column: "Dose (cells)", reason: "catalog Functional Type is 'Formulation and dose'"}
+    …
 ```
 
-Delete a value to use its parameters in this task. The values must match the
-catalog's exactly: a value no catalog row has matches nothing, and the run warns
-about it, with the values the catalog does have. A catalog without a *Variable
-Role* column refuses the run: delete the block, or add the column.
+Delete a line to use that parameter. Each parameter is listed once, under the first
+group that has it (screened, then the catalog groups, then the dates and the
+shifts); a later group names it in a comment, `#   Start date (listed above)`. The
+values must match the catalog's exactly: a value no catalog parameter has, or a
+column the catalog does not have, is said in a comment and warned about when the
+task is made. Without a catalog to read, the task gets the same rules as
+`exclude_by_catalog` instead. The list is the catalog of the day: a parameter the
+catalog gains later is not on it; make the task again, or add the line.
 
 **Date columns are left out by default**, every one the latest build's
 `dates.xlsx` holds at any manufacturing site and production line: a model fitted on a date learns when a batch was made

@@ -18,20 +18,23 @@ from pathlib import Path
 from .config import ConfigError
 from .taskconfig import TASK_FILE
 
-#: The catalog column, and its values, a new task leaves out by default: what a parameter's
-#: role says cannot be a cause of how a batch turns out, or is known only after it.
-ROLE_COLUMN = "Variable Role"
-EXCLUDED_ROLES = (
-    "Identifier",
-    "Timestamp",
-    "Context / design factor",
-    "CQA / release result",
-    "Disposition label",
-    "Equipment ID",
-    "Material lot ID",
-    "Post-release logistics",
-    "Setpoint / plan",
-)
+#: The catalog columns, and their values, a new task leaves out by default: what a
+#: parameter's role or function says cannot be a cause of how a batch turns out, or is known
+#: only at or after release. A new task.yaml lists every such parameter on its own line.
+EXCLUDED_BY_CATALOG: dict[str, tuple[str, ...]] = {
+    "Variable Role": (
+        "Identifier",
+        "Timestamp",
+        "Context / design factor",
+        "CQA / release result",
+        "Disposition label",
+        "Equipment ID",
+        "Material lot ID",
+        "Post-release logistics",
+        "Setpoint / plan",
+    ),
+    "Functional Type": ("Formulation and dose", "Quality and disposition"),
+}
 
 
 def template(name: str) -> str:
@@ -52,6 +55,7 @@ def init(
     site: str = "",
     dated: list[tuple[str, str]] = (),
     dated_built: str = "",
+    catalog_groups: list[tuple[str, str | None, list[str]]] | None = None,
 ) -> Path:
     """Write ``<folder>/task.yaml``, pointing at ``config``. Returns its path.
 
@@ -64,8 +68,14 @@ def init(
     (representatives the register excludes too) as comments above them. ``site`` is
     the key of the site the task is about (config.yaml's ``site:``).
 
-    The template leaves out every parameter whose catalog *Variable Role* is one of
-    :data:`EXCLUDED_ROLES`, under ``predictors.exclude_by_catalog``.
+    ``catalog_groups`` is (catalog column, value, its parameters) for every rule of
+    :data:`EXCLUDED_BY_CATALOG`, the value None when the catalog has no such column: each
+    parameter is written on its own ``predictors.exclude`` line, under a comment naming its
+    group. Without them (no catalog could be read) the rules are written as
+    ``predictors.exclude_by_catalog`` instead, so a run still applies them.
+
+    A parameter is listed once, under the first group that has it; a later group names it
+    in a comment, so every group shows all its members.
     """
     path = (Path(folder).expanduser() / TASK_FILE).resolve()
     if path.exists() and not force:
@@ -84,9 +94,11 @@ def init(
         .replace("__QUESTION__", question or f"What goes with {target or 'the target'}?")
         .replace("__TARGET__", target or "<the column to predict>")
         .replace("__TARGET_TYPE__", "numeric")
-        .replace("__ROLE_COLUMN__", ROLE_COLUMN)
         .replace(
-            "__EXCLUDED_ROLES__", "\n".join(f"      - {json.dumps(r)}" for r in EXCLUDED_ROLES)
+            "  exclude_by_catalog: {}          # {catalog column: [values left out]}\n",
+            _catalog_rules()
+            if catalog_groups is None
+            else "  exclude_by_catalog: {}          # {catalog column: [values left out]}\n",
         )
         .replace(
             "  exclude: []                     # single columns: [{column: ..., reason: ...}]\n",
@@ -98,12 +110,27 @@ def init(
                 conflicts,
                 dated,
                 dated_built,
+                catalog_groups or [],
             ),
         )
     )
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
     return path
+
+
+def _catalog_rules() -> str:
+    """The default catalog rules as ``exclude_by_catalog``, when no catalog could be read to
+    list their parameters one by one."""
+    lines = [
+        "  exclude_by_catalog:              # {catalog column: [values left out]}",
+        "    # No catalog could be read when this task was made, so its parameters are not",
+        "    # listed one by one under exclude: these rules leave them out instead.",
+    ]
+    for column, values in EXCLUDED_BY_CATALOG.items():
+        lines.append(f"    {json.dumps(column)}:")
+        lines += [f"      - {json.dumps(v)}" for v in values]
+    return "\n".join(lines) + "\n"
 
 
 def _excludes(
@@ -114,11 +141,25 @@ def _excludes(
     conflicts: list[str] = (),
     dated: list[tuple[str, str]] = (),
     dated_built: str = "",
+    catalog_groups: list[tuple[str, str | None, list[str]]] = (),
 ) -> str:
-    """The ``predictors.exclude`` lines of a new task: empty, or the parameters left out."""
-    if not screened and not shifting and not dated:
+    """The ``predictors.exclude`` lines of a new task: empty, or every parameter left out on
+    its own line, in groups, each parameter once."""
+    if not screened and not shifting and not dated and not catalog_groups:
         return "  exclude: []                     # single columns: [{column: ..., reason: ...}]\n"
     lines = ["  exclude:                        # single columns: [{column: ..., reason: ...}]"]
+    listed: set[str] = set()
+
+    def entries(pairs) -> list[str]:
+        out = []
+        for column, reason in pairs:
+            if column in listed:
+                out.append(f"    #   {column} (listed above)")
+            else:
+                listed.add(column)
+                out.append(_exclude(column, reason))
+        return out
+
     if screened:
         lines += [
             f"    # Screened out by the screening register (last decision {as_of}) at this site.",
@@ -132,21 +173,36 @@ def _excludes(
                 "    # representative.",
             ]
             lines += [f"    #   {line}" for line in conflicts]
-        lines += [_exclude(column, reason) for column, reason in screened]
+        lines += entries(screened)
+    if catalog_groups:
+        lines += [
+            "    # By the catalog: parameters whose role or function says they cannot explain",
+            "    # how a batch turned out, or are known only at or after release. Delete a line",
+            "    # to use the parameter.",
+        ]
+        for column, value, members in catalog_groups:
+            if value is None:
+                lines.append(f"    # Catalog {column}: the catalog has no such column")
+            elif not members:
+                lines.append(f"    # Catalog {column}: {value} — no catalog parameter has it")
+            else:
+                count = f"{len(members)} parameter{'' if len(members) == 1 else 's'}"
+                lines.append(f"    # Catalog {column}: {value} ({count})")
+                lines += entries((m, f"catalog {column} is '{value}'") for m in members)
     if dated:
         lines += [
             f"    # Dates and times at this site, as the build of {dated_built} found them",
             "    # (dates_report.html): a model would learn when a batch was made. The durations",
             "    # derived from them stay usable. Delete a line to use the date again.",
         ]
-        lines += [_exclude(column, reason) for column, reason in dated]
+        lines += entries(dated)
     if shifting:
         lines += [
             f"    # Run in groups over time at a manufacturing site, as the build of {built}",
             "    # found (shifts_report.html; `ml task new --exclude-shifting`). A lot does this,",
             "    # and so the model would learn time. Delete a line to use the parameter again.",
         ]
-        lines += [_exclude(column, reason) for column, reason in shifting]
+        lines += entries(shifting)
     return "\n".join(lines) + "\n"
 
 

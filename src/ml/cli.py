@@ -1335,6 +1335,53 @@ def _shifting_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[st
     return [(p, "runs in groups over time: " + "; ".join(w)) for p, w in why.items()], built
 
 
+def _catalog_groups_for_new_task(
+    config: dict[str, Any] | None,
+) -> list[tuple[str, str | None, list[str]]] | None:
+    """Per default catalog rule (:data:`ml.scaffold.EXCLUDED_BY_CATALOG`), the catalog's
+    parameters it leaves out: (column, value, parameters), the value None when the catalog
+    has no such column. None when no catalog can be read: the new task then carries the
+    rules themselves."""
+    if not config:
+        log.warn(
+            MODULE,
+            "No config.yaml found: the new task file leaves out the default catalog roles by "
+            "rule, without listing their parameters",
+        )
+        return None
+    try:
+        workspace.load_vocabulary(config)
+        catalog = io.read_catalog(workspace.table_source(config, "catalog", None))
+    except Exception as exc:  # the task is still worth making; the rules stand in
+        log.warn(
+            MODULE,
+            f"The catalog could not be read ({exc}): the new task file leaves out the default "
+            "catalog roles by rule, without listing their parameters",
+        )
+        return None
+    groups: list[tuple[str, str | None, list[str]]] = []
+    for column, values in scaffold.EXCLUDED_BY_CATALOG.items():
+        if column not in catalog.columns:
+            log.warn(
+                MODULE,
+                f"The catalog has no '{column}' column: the new task leaves out nothing by it",
+            )
+            groups.append((column, None, []))
+            continue
+        cells = catalog[column].fillna("").astype(str).str.strip()
+        for value in values:
+            members = list(dict.fromkeys(catalog.loc[cells == value, "Parameter"].astype(str)))
+            if not members:
+                log.warn(
+                    MODULE,
+                    f"No catalog parameter has '{column}' '{value}' — check the spelling "
+                    "against the catalog",
+                    "the catalog's values: " + ", ".join(sorted(set(cells) - {""})[:20]),
+                )
+            groups.append((column, value, members))
+    return groups
+
+
 def _dates_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[str, str]], str]:
     """Every date column the latest build found at any subsite of the site, with why, for a
     new task file; and when that build ran. Without a build to read, a warning and nothing."""
@@ -2069,10 +2116,9 @@ def _run(args) -> int:
     if command == "task new":
         found = _config(args, start=args.folder, required=False)
         screened, as_of, conflicts = _screened_for_new_task(found)
+        catalog_groups = _catalog_groups_for_new_task(found)
         dated, dated_built = ([], "") if args.keep_dates else _dates_for_new_task(found)
-        dated = [(p, why) for p, why in dated if p not in dict(screened)]
         shifting, built = _shifting_for_new_task(found) if args.exclude_shifting else ([], "")
-        shifting = [(p, why) for p, why in shifting if p not in dict(screened + dated)]
         path = scaffold.init(
             args.folder,
             args.target,
@@ -2087,6 +2133,7 @@ def _run(args) -> int:
             shifting_built=built,
             dated=dated,
             dated_built=dated_built,
+            catalog_groups=catalog_groups,
         )
         catalog = None
         if found:

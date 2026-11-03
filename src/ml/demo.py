@@ -962,6 +962,35 @@ def _role(parameter: str) -> str:
     return "Process parameter"
 
 
+#: The made-up catalog's 'Functional Type', by key; every other parameter is a process one.
+FUNCTIONS = {
+    "Formulation and dose": (
+        "dose_per_kg",
+        "dose_cells",
+        "formulated_concentration",
+        "formulated_viability",
+        "formulation_cell_volume",
+        "formulation_medium_volume",
+    ),
+    "Quality and disposition": (
+        "disposition",
+        "oos_type",
+        "sterility",
+        "mycoplasma",
+        "mycoplasma_method",
+        "testing_done",
+    ),
+}
+
+
+def _function(parameter: str) -> str:
+    """The made-up catalog's 'Functional Type' column, which a new task selects by too."""
+    for function, keys in FUNCTIONS.items():
+        if parameter in {c(key) for key in keys}:
+            return function
+    return "Process"
+
+
 def catalog(first: pd.DataFrame, second: pd.DataFrame) -> pd.DataFrame:
     """The catalog: every parameter the batch table may hold, and the type it holds.
 
@@ -1007,6 +1036,7 @@ def catalog(first: pd.DataFrame, second: pd.DataFrame) -> pd.DataFrame:
             "Value Type": [_value_type(p) for p in parameters],
             "Available At": [_stage(p) for p in parameters],
             "Variable Role": [_role(p) for p in parameters],
+            "Functional Type": [_function(p) for p in parameters],
         }
     )
 

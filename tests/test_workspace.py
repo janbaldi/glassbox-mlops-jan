@@ -483,22 +483,63 @@ def test_a_category_value_no_catalog_row_has_is_warned_about(caplog):
     assert "'QC'" not in caplog.text.split("no catalog parameter has")[1].split("—")[0]
 
 
-def test_a_new_task_leaves_out_the_roles_that_cannot_explain_a_batch(built, tmp_path):
+def test_a_new_task_lists_every_parameter_the_catalog_defaults_leave_out(built, tmp_path):
     from ml import scaffold
 
     folder = tmp_path / "roles"
     assert cli.main(["--config", str(built["config_path"]), "task", "new", str(folder)]) == 0
+    text = (folder / "task.yaml").read_text(encoding="utf-8")
     spec = taskconfig.load(folder / "task.yaml")
-    assert dict(spec.predictors.exclude_by_catalog) == {"Variable Role": scaffold.EXCLUDED_ROLES}
-    assert len(scaffold.EXCLUDED_ROLES) == 9 and "Identifier" in scaffold.EXCLUDED_ROLES
-    # The catalog rows with those roles are not among the task's usable inputs.
+    # No rule by value: each parameter on its own line, its group as a comment.
+    assert spec.predictors.exclude_by_catalog == ()
+    excluded = dict(spec.predictors.exclude)
     catalog = pd.read_excel(shared(built["directory"], built["config"], "catalog"))
-    role = dict(zip(catalog["Parameter"], catalog["Variable Role"]))
+    for column, values in scaffold.EXCLUDED_BY_CATALOG.items():
+        for value in values:
+            members = set(catalog.loc[catalog[column] == value, "Parameter"])
+            assert members <= set(excluded), (column, value)
+            if members:
+                assert f"# Catalog {column}: {value} (" in text
+    assert scaffold.EXCLUDED_BY_CATALOG["Functional Type"] == (
+        "Formulation and dose",
+        "Quality and disposition",
+    )
+    assert excluded[c("patient_id")] == "catalog Variable Role is 'Identifier'"
+    assert excluded[c("dose_cells")] == "catalog Functional Type is 'Formulation and dose'"
+    # Listed once; a later group (here the dates) names it in a comment.
+    assert text.count(f'column: "{c("date_start")}"') == 1
+    assert f"#   {c('date_start')} (listed above)" in text
+    # None of them is among the task's usable inputs; a process parameter is.
     usable = set(pd.read_excel(folder / "task_catalog.xlsx")["Parameter"])
-    assert usable and not any(role.get(p) in scaffold.EXCLUDED_ROLES for p in usable)
-    for parameter in (c("patient_id"), c("vector_lot"), c("incubator_id"), c("date_start")):
-        assert role[parameter] in scaffold.EXCLUDED_ROLES and parameter not in usable
+    assert usable and not usable & set(excluded)
+    role = dict(zip(catalog["Parameter"], catalog["Variable Role"]))
     assert any(role.get(p) == "Process parameter" for p in usable)
+
+
+def test_without_a_catalog_a_new_task_leaves_the_defaults_out_by_rule(tmp_path):
+    from ml import scaffold
+
+    path = scaffold.init(tmp_path / "t", "y", "")
+    spec = taskconfig.load(path)
+    assert dict(spec.predictors.exclude_by_catalog) == scaffold.EXCLUDED_BY_CATALOG
+    assert spec.predictors.exclude == ()
+    # With the catalog read, a group the catalog cannot fill says so.
+    path = scaffold.init(
+        tmp_path / "u",
+        "y",
+        "",
+        catalog_groups=[("Variable Role", "Identifier", ["a", "b"]), ("Functional Type", None, [])],
+        dated=[("a", "a date")],
+    )
+    text = path.read_text(encoding="utf-8")
+    assert "# Catalog Functional Type: the catalog has no such column" in text
+    assert "#   a (listed above)" in text
+    spec = taskconfig.load(path)
+    assert dict(spec.predictors.exclude) == {
+        "a": "catalog Variable Role is 'Identifier'",
+        "b": "catalog Variable Role is 'Identifier'",
+    }
+    assert spec.predictors.exclude_by_catalog == ()
 
 
 # ---------------------------------------------------------------------------

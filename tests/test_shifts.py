@@ -116,13 +116,21 @@ def test_a_new_task_can_leave_out_every_parameter_that_runs_in_groups(built, tmp
     text = (folder / "task.yaml").read_text(encoding="utf-8")
     assert "Run in groups over time at a manufacturing site, as the build of" in text
     excluded = dict(taskconfig.load(folder / "task.yaml").predictors.exclude)
-    why = excluded[c("media_lot")]
+    # The medium lot is listed by its catalog role first; the shifts name it in a comment.
+    assert excluded[c("media_lot")] == "catalog Variable Role is 'Material lot ID'"
+    shifting = text.split("Run in groups over time at a manufacturing site")[1]
+    assert f"#   {c('media_lot')} (listed above)" in shifting
+    # Its reason for running in groups says where; a parameter no catalog role covered would
+    # carry it.
+    why = dict(cli._shifting_for_new_task(built["config"])[0])[c("media_lot")]
     assert why.startswith("runs in groups over time: ") and why.count("changes with Shifting") == 1
     assert f"at {names.site('a')} plant · Line A" in why and names.site("b") not in why
     # Without the option, nothing that runs in groups is listed.
     plain = tmp_path / "plain"
     assert cli.main(["--config", config, "task", "new", str(plain)]) == 0
-    assert c("media_lot") not in dict(taskconfig.load(plain / "task.yaml").predictors.exclude)
+    reasons = dict(taskconfig.load(plain / "task.yaml").predictors.exclude).values()
+    assert not any(why.startswith("runs in groups over time") for why in reasons)
+    assert "Run in groups over time" not in (plain / "task.yaml").read_text(encoding="utf-8")
 
 
 def test_the_shifts_run_per_manufacturing_site_and_production_line():
