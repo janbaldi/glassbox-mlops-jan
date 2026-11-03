@@ -94,20 +94,16 @@ def test_every_date_column_is_put_in_order_by_day():
     assert len(report.days["release"]) == 90 and report.days["release"][0] == 10.0
 
 
-def test_the_pairs_a_batch_reverses_are_named_with_their_batches():
+def test_each_column_says_how_it_sits_on_the_timeline():
     rows, report = _found()
-    (swap,) = report.swaps
-    assert (swap["Usually first"], swap["Usually second"]) == ("seed", "check")
-    assert swap["Reversed %"] == 8.9 and swap["Neighbours"] == "yes"
-    assert swap["Reversed in"].startswith("B000, B012, B024") and "3 more" in swap["Reversed in"]
-    assert rows["check"]["Before previous %"] == 8.9 and rows["check"]["Swaps with"] == "seed"
-    assert report.reversed_in[0] == ["check before seed"] and report.reversed_in[1] == []
-    first, *_ = dates.batch_rows(report)
-    assert first["Pairs reversed"] == 1 and first["Reversed"] == "check before seed"
-    # Row before column, ties half.
-    k = report.order.index
-    assert report.before[k("seed")][k("check")] == 0.911
-    assert report.before[k("harvest")][k("harvest copy")] == 0.5
+    # Usually after seed, before it in one batch of twelve.
+    assert rows["check"]["Before previous %"] == 8.9
+    assert rows["feed"]["Drift ρ"] > 0.5, "moved to day 4 over the months"
+    assert rows["qc"]["First recorded"] > rows["start"]["First recorded"]
+    assert rows["lot made"]["Median hours from anchor"] < 0
+    assert rows["thaw"]["Off the timeline because"].startswith("a time of day")
+    days = dates.day_rows(report)
+    assert len(days) == 90 and days[0]["release (day)"] == 10.0
 
 
 def test_the_time_of_day_is_read_round_the_clock():
@@ -118,58 +114,41 @@ def test_the_time_of_day_is_read_round_the_clock():
     assert rows["night sample"]["Median time of day"].startswith(("23", "00"))
     assert rows["thaw"]["Median time of day"].startswith("0")
     assert rows["release"]["Median time of day"] == ""
-    said = "\n".join(report.findings)
-    assert "Done at night: *night sample*" in said
-    assert "any time of day" not in said
     shifted = dates.circular(pd.Series([23.5, 0.5, 23.0, 1.0]))
     assert list(shifted) == [23.5, 24.5, 23.0, 25.0]
     assert list(dates.circular(pd.Series([8.0, 9.0]))) == [8.0, 9.0]
 
 
-def test_the_findings_say_what_the_dates_show():
-    rows, report = _found()
-    said = "\n".join(report.findings)
-    assert "**day 0**: *start* → *seed* → *check*; **day 3**: *feed*" in said
-    assert "*check* comes before *seed* in 9% of the batches with both (B000" in said
-    assert "*harvest* and *harvest copy* hold the same timepoint" in said
-    assert "*feed* comes later over the months" in said
-    assert "*feed* has no fixed day: day 3 in 67%, day 4 in 33%" in said
-    assert "*harvest copy* has no fixed day" not in said, "said once, of the first of the two"
-    assert "*qc* is recorded from 2024-03-31 on" in said
-    assert "The longest wait is between *qc* and *release*" in said
-    assert "*lot made* is the date of a lot or a material" in said
-    assert "Off the timeline: *thaw*" in said
-
-
 def test_too_few_values_keep_a_column_off_the_timeline_and_nothing_breaks():
     rows, report = dates.for_build(_process(n=15), {}, "key", "start")
-    assert report.order == [] and report.swaps == []
+    assert report.order == [] and report.phases == []
     assert {r["Parameter"] for r in rows} >= {"start", "seed"}
     assert all(r["Off the timeline because"] for r in rows)
-    assert len(dates.batch_rows(report)) == 15
-    for draw in (plots.date_timeline, plots.date_days, plots.date_order):
+    for draw in (plots.date_timeline, plots.date_days):
         assert draw(report) is None
     _, empty = dates.for_build(pd.DataFrame({"key": ["a"], "x": [1.0]}), {}, "key", "start")
-    assert empty.kinds == {} and plots.date_calendar(empty) is None
+    assert empty.kinds == {} and plots.date_clock(empty) is None
 
 
-def test_every_figure_draws_every_batch():
+def test_the_figures_draw_every_batch_light_enough_for_thousands():
     _, report = _found()
-    for draw in (
-        plots.date_timeline,
-        plots.date_days,
-        plots.date_order,
-        plots.date_clock,
-        plots.date_calendar,
-        plots.date_lots,
-    ):
+    for draw in (plots.date_timeline, plots.date_days, plots.date_clock):
         block = draw(report)
         assert block["kind"] == "figure" and block["spec"]["data"], draw.__name__
-    dots = plots.date_timeline(report)["spec"]["data"][0]
-    assert len(dots["x"]) == sum(v is not None for c in report.order for v in report.days[c])
-    calendar = plots.date_calendar(report)["spec"]["data"]
-    broken = next(t for t in calendar if t["name"] == "out of order here")
-    assert len(broken["x"]) == 2 * sum(len(p) for p in report.reversed_in)
+    timeline = plots.date_timeline(report)["spec"]["data"]
+    # Everything is WebGL: a browser draws WebGL above SVG, so the spreads must be too.
+    assert {t["type"] for t in timeline} == {"scattergl"}
+    clouds = [t for t in timeline if t.get("name") == "one batch"]
+    # One WebGL cloud per column, holding every batch with a value; the hover names the batch.
+    assert len(clouds) == len(report.order)
+    assert sum(len(t["x"]) for t in clouds) == sum(
+        v is not None for c in report.order for v in report.days[c]
+    )
+    assert clouds[0]["text"][0] == report.batches[0]
+    # The spreads are three traces however many columns, not three per column.
+    assert len(timeline) == len(report.order) + 3
+    clock = plots.date_clock(report)["spec"]["data"]
+    assert len(clock) == len(report.clock) + 3
 
 
 # ---------------------------------------------------------------------------
@@ -179,21 +158,13 @@ def test_the_build_writes_the_dates_report_and_table(built):
     folder = shared(built["directory"], built["config"], "batch_table").parent
     payload = stlite.read_payload((folder / "dates_report.html").read_text("utf-8"))
     assert payload["title"] == "Batch table dates" and payload["help"]["title"] == "Method"
-    assert [s["title"] for s in payload["sections"]][:7] == [
-        "What the dates say",
-        "Explore the timeline",
+    assert [s["title"] for s in payload["sections"]] == [
         "The timeline",
-        "The order",
         "The time of day",
-        "Over the calendar",
-        "Every date column",
+        "Provenance",
     ]
-    viewer = payload["sections"][1]["blocks"][0]
-    assert viewer["kind"] == "date_viewer"
-    assert len(viewer["batch_rows"]) == len(viewer["batches"])
-    assert [row[0] for row in viewer["column_rows"]] == viewer["order"]
     book = pd.ExcelFile(folder / "dates.xlsx")
-    assert {"Reversed pairs", "Batches", "Days", screening.ABOUT_SHEET} <= set(book.sheet_names)
+    assert {"Days", screening.ABOUT_SHEET} <= set(book.sheet_names)
     table = pd.read_excel(book, sheet_name=screening.EVIDENCE_SHEET)
     assert set(table["Site"]) == {names.site("a")}
     assert names.col("date_start") in set(table["Parameter"])

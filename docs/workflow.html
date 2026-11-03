@@ -456,8 +456,8 @@ footer code { font-family: var(--mono); font-size: 12px; color: var(--ink); }
 
     batch_data: ["The batch table", "<p>One row per batch of the site, cleaned, with the calculated features, in a folder named after the site. The Parquet copy keeps column types; tasks read it.</p>"],
     build_report: ["build_report.html", "<p>Overview, sources, every cleaning change, catalog coverage (and why a parameter is absent), joined sources, the run log and provenance.</p>"],
-    dates_report: ["dates_report.html", "<p>Per site: every date column on one timeline, in order, by calendar day after the anchor and by time of day, with the pairs some batches reverse. Click a column to see it over the months, a batch to see its timeline over the typical one. Takes no part in screening.</p>"],
-    dates_xlsx: ["dates.xlsx", `<p>Every date column, every reversed pair, and each batch's place of every column. ${C("ml task new")} lists the date columns under ${C("predictors.exclude")}.</p>`],
+    dates_report: ["dates_report.html", "<p>Per site: every date column on one timeline, in order, by calendar day after the anchor, and by time of day. Takes no part in screening.</p>"],
+    dates_xlsx: ["dates.xlsx", `<p>Every date column, and each batch's place of every column. ${C("ml task new")} lists the date columns under ${C("predictors.exclude")}.</p>`],
     miss_report: ["missingness_report.html", "<p>Per site: how each parameter goes missing and which go missing together. Click a row to draw its pattern; tick groups and parameters to propose a screening decision.</p>"],
     miss_xlsx: ["missingness.xlsx", "<p>Every parameter per site: missing %, pattern, last measured, and its missingness and correlation group with the suggested representative. What <code>ml screening add</code> checks a proposal against and cites.</p>"],
     corr_report: ["correlation_report.html", "<p>Numerical parameters grouped by Spearman |ρ|, each group with a suggested representative, whatever the register says. Ticked groups exclude every member but the one you keep.</p>"],

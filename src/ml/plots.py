@@ -442,13 +442,6 @@ def missing_by_category(group) -> Block | None:
 # ---------------------------------------------------------------------------
 # The dates report
 # ---------------------------------------------------------------------------
-#: For a handful of series at most (lot dates): a palette that passes the dataviz checks
-#: (lightness band, chroma, colour-blind and normal-vision separation of neighbours), in
-#: fixed order. Three fall below 3:1 against a white page, so every figure names its
-#: series in the legend and the hover.
-SERIES_COLOURS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300")
-#: What is out of order: the palette's warm pole, never a series colour here.
-ACCENT = "#eb6834"
 #: Sequential, light to dark, one hue: a share from 0 to 1.
 SEQUENTIAL_BLUE = [[0.0, "#f4f6f8"], [0.5, "#86b6ef"], [1.0, "#104281"]]
 #: A light band behind every other calendar day.
@@ -484,6 +477,66 @@ def _ticks_by_hour(low: float, high: float) -> tuple[list[float], list[str]]:
     return values, [f"{v % 24:02d}:00" for v in values]
 
 
+def _clouds(figure_: go.Figure, rows: list[tuple[str, list, list]], seed: int) -> None:
+    """Every batch as a grey dot, one WebGL trace per row, so a thousand batches over thirty
+    columns draws at once. ``rows`` is (name, value per batch, hover label per batch); the
+    hover shows the label and the row's name."""
+    for row, (name, values, labels) in enumerate(rows):
+        jitter = _jitter(len(values), seed=seed + row)
+        present = [i for i, v in enumerate(values) if v is not None]
+        figure_.add_trace(
+            go.Scattergl(
+                x=[round(values[i], 3) for i in present],
+                y=[round(row + jitter[i], 2) for i in present],
+                mode="markers",
+                marker=dict(size=5, color=MUTED, opacity=0.55),
+                name="one batch",
+                legendgroup="batches",
+                showlegend=row == 0,
+                text=[labels[i] for i in present],
+                hovertemplate="%{text}<extra>" + _short(name) + "</extra>",
+            )
+        )
+
+
+def _spreads(figure_: go.Figure, boxes: list[tuple[int, str, list]], median: list[str]) -> None:
+    """The 10th–90th percentile as a thin line, the middle half as a bar, the median as a
+    ringed dot, for every row at once: three traces, however many rows. ``boxes`` is (row,
+    name, [p10, p25, p50, p75, p90]); ``median`` the median of each, as hover text. WebGL
+    like the dots: a browser draws WebGL above SVG, so SVG marks would sit under them."""
+
+    def segments(low: int, high: int) -> tuple[list, list]:
+        xs, ys = [], []
+        for row, _, q in boxes:
+            xs += [q[low], q[high], None]
+            ys += [row, row, None]
+        return xs, ys
+
+    for (low, high), width in (((0, 4), 1.5), ((1, 3), 8)):
+        xs, ys = segments(low, high)
+        figure_.add_trace(
+            go.Scattergl(
+                x=xs,
+                y=ys,
+                mode="lines",
+                line=dict(color=INK, width=width),
+                showlegend=False,
+                hoverinfo="skip",
+            )
+        )
+    figure_.add_trace(
+        go.Scattergl(
+            x=[q[2] for _, _, q in boxes],
+            y=[row for row, _, _ in boxes],
+            mode="markers",
+            marker=dict(size=10, color=INK, line=dict(color="white", width=2)),
+            name="median, middle half, 10th–90th percentile",
+            text=[f"<b>{name}</b><br>{m}" for (_, name, _), m in zip(boxes, median)],
+            hovertemplate="%{text}<extra></extra>",
+        )
+    )
+
+
 def date_timeline(report) -> Block | None:
     """Every date column on one timeline: every batch as a dot, the middle half as a bar,
     four batches in five between the whiskers, the median as a ringed dot."""
@@ -491,66 +544,23 @@ def date_timeline(report) -> Block | None:
         return None
     names = [_short(c) for c in report.order]
     figure_ = go.Figure()
-    xs, ys, text = [], [], []
-    for row, column in enumerate(report.order):
-        values = report.days[column]
-        jitter = _jitter(len(values), seed=row)
-        for i, value in enumerate(values):
-            if value is not None:
-                xs.append(value)
-                ys.append(row + jitter[i])
-                text.append(f"{report.batches[i]} · {report.dates[i]}<br>{column}")
-    figure_.add_trace(
-        go.Scatter(
-            x=xs,
-            y=ys,
-            mode="markers",
-            marker=dict(size=5, color=MUTED, opacity=0.55),
-            name="one batch",
-            text=text,
-            hovertemplate="%{text}: day %{x:.2f}<extra></extra>",
-        )
+    _clouds(figure_, [(c, report.days[c], report.batches) for c in report.order], seed=0)
+    boxes = [
+        (row, column, report.quantiles[column])
+        for row, column in enumerate(report.order)
+        if report.quantiles[column][2] is not None
+    ]
+    _spreads(
+        figure_,
+        boxes,
+        [
+            f"median day {q[2]:.2f}; middle half {q[1]:.2f} to {q[3]:.2f}; usual day "
+            f"{report.usual_day.get(c, '')}"
+            for _, c, q in boxes
+        ],
     )
-    for row, column in enumerate(report.order):
-        p10, p25, p50, p75, p90 = report.quantiles[column]
-        if p50 is None:
-            continue
-        figure_.add_trace(
-            go.Scatter(
-                x=[p10, p90],
-                y=[row, row],
-                mode="lines",
-                line=dict(color=INK, width=1.5),
-                showlegend=False,
-                hoverinfo="skip",
-            )
-        )
-        figure_.add_trace(
-            go.Scatter(
-                x=[p25, p75],
-                y=[row, row],
-                mode="lines",
-                line=dict(color=INK, width=8),
-                showlegend=False,
-                hoverinfo="skip",
-            )
-        )
-        figure_.add_trace(
-            go.Scatter(
-                x=[p50],
-                y=[row],
-                mode="markers",
-                marker=dict(size=10, color=INK, line=dict(color="white", width=2)),
-                showlegend=row == 0,
-                name="median, middle half, 10th–90th percentile",
-                customdata=[[p10, p25, p75, p90, report.usual_day.get(column, "")]],
-                hovertemplate=f"<b>{column}</b><br>median day %{{x:.2f}}<br>middle half "
-                "%{customdata[1]:.2f} to %{customdata[2]:.2f}<br>10th–90th %{customdata[0]:.2f} "
-                "to %{customdata[3]:.2f}<br>usual day %{customdata[4]}<extra></extra>",
-            )
-        )
-    low = min(q[0] for q in report.quantiles.values() if q[0] is not None)
-    high = max(q[4] for q in report.quantiles.values() if q[4] is not None)
+    low = min(q[0] for _, _, q in boxes)
+    high = max(q[4] for _, _, q in boxes)
     _day_bands(figure_, min(low, 0), high + 0.5)
     figure_.update_layout(showlegend=True)
     figure_ = _style(
@@ -569,9 +579,9 @@ def date_timeline(report) -> Block | None:
     figure_.update_xaxes(showgrid=False)
     return _fig(
         figure_,
-        "Top to bottom in the order the process runs in. A grey dot is one batch; the bar is "
-        "the middle half of the batches, the thin line four in five, the ringed dot the median. "
-        "The bands are calendar days.",
+        "Top to bottom in the order the process runs in. A grey dot is one batch (hover for "
+        "it); the bar is the middle half of the batches, the thin line four in five, the "
+        "ringed dot the median. The bands are calendar days.",
     )
 
 
@@ -611,41 +621,9 @@ def date_days(report) -> Block | None:
     )
 
 
-def date_order(report) -> Block | None:
-    """How often each column comes before each other: the order the process runs in."""
-    if len(report.order) < 2:
-        return None
-    names = [_short(c, 32) for c in report.order]
-    z = [[None if v is None else 100 * v for v in row] for row in report.before]
-    figure_ = go.Figure(
-        go.Heatmap(
-            z=z,
-            x=names,
-            y=names,
-            colorscale=SEQUENTIAL_BLUE,
-            zmin=0,
-            zmax=100,
-            colorbar=dict(title="%", thickness=10),
-            text=[["" if v is None else f"{v:.0f}" for v in row] for row in z],
-            texttemplate="%{text}" if len(names) <= 16 else None,
-            hovertemplate="%{y} before %{x}: %{z:.0f}% of the batches with both<extra></extra>",
-            xgap=2,
-            ygap=2,
-        )
-    )
-    figure_ = _style(
-        figure_,
-        "How often the row comes before the column",
-        height=max(320, 26 * len(names) + 170),
-    )
-    figure_.update_yaxes(autorange="reversed", showgrid=False)
-    figure_.update_xaxes(tickangle=-40)
-    return _fig(
-        figure_,
-        "Columns in the order the process runs in. Above the diagonal should be dark (100%: the "
-        "row always comes first); a light cell there is a pair reversed in some batches. Equal "
-        "timepoints count half.",
-    )
+def _hhmm(hours: float) -> str:
+    minutes = int(round(hours * 60)) % (24 * 60)
+    return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
 def date_clock(report) -> Block | None:
@@ -658,65 +636,31 @@ def date_clock(report) -> Block | None:
     if not columns:
         return None
     figure_ = go.Figure()
-    xs, ys, text = [], [], []
+    _clouds(
+        figure_,
+        [
+            (
+                c,
+                report.clock[c],
+                [
+                    "" if v is None else f"{b} {_hhmm(v)}"
+                    for b, v in zip(report.batches, report.clock[c])
+                ],
+            )
+            for c in columns
+        ],
+        seed=100,
+    )
     boxes = []
     for row, column in enumerate(columns):
-        clock = report.clock[column]
-        jitter = _jitter(len(clock), seed=100 + row)
-        for i, value in enumerate(clock):
-            if value is not None:
-                xs.append(value)
-                ys.append(row + jitter[i])
-                text.append(f"{report.batches[i]} · {report.dates[i]}")
-        present = [v for v in clock if v is not None]
+        present = [v for v in report.clock[column] if v is not None]
         if present:
-            boxes.append((row, column, list(np.quantile(present, [0.1, 0.25, 0.5, 0.75, 0.9]))))
-    figure_.add_trace(
-        go.Scatter(
-            x=xs,
-            y=ys,
-            mode="markers",
-            marker=dict(size=5, color=MUTED, opacity=0.55),
-            name="one batch",
-            text=text,
-            customdata=[f"{int(v % 24):02d}:{int(round(v % 1 * 60)) % 60:02d}" for v in xs],
-            hovertemplate="%{text}: %{customdata}<extra></extra>",
-        )
-    )
-    for row, column, (p10, p25, p50, p75, p90) in boxes:
-        figure_.add_trace(
-            go.Scatter(
-                x=[p10, p90],
-                y=[row, row],
-                mode="lines",
-                line=dict(color=INK, width=1.5),
-                showlegend=False,
-                hoverinfo="skip",
+            boxes.append(
+                (row, column, [float(q) for q in np.quantile(present, [0.1, 0.25, 0.5, 0.75, 0.9])])
             )
-        )
-        figure_.add_trace(
-            go.Scatter(
-                x=[p25, p75],
-                y=[row, row],
-                mode="lines",
-                line=dict(color=INK, width=8),
-                showlegend=False,
-                hoverinfo="skip",
-            )
-        )
-        figure_.add_trace(
-            go.Scatter(
-                x=[p50],
-                y=[row],
-                mode="markers",
-                marker=dict(size=10, color=INK, line=dict(color="white", width=2)),
-                showlegend=row == 0,
-                name="median, middle half, 10th–90th percentile",
-                hovertemplate=f"<b>{column}</b><br>median "
-                f"{int(p50 % 24):02d}:{int(round(p50 % 1 * 60)) % 60:02d}<extra></extra>",
-            )
-        )
-    low, high = (min(xs), max(xs)) if xs else (0, 24)
+    _spreads(figure_, boxes, [f"median {_hhmm(q[2])}" for _, _, q in boxes])
+    values_all = [v for c in columns for v in report.clock[c] if v is not None]
+    low, high = (min(values_all), max(values_all)) if values_all else (0, 24)
     for start, end in ((low - 1, 6), (20, high + 1), (low - 1 + 24, 6 + 24)):
         if end > start and end > low and start < high:
             figure_.add_vrect(
@@ -742,99 +686,4 @@ def date_clock(report) -> Block | None:
         figure_,
         "Clock time, the shaded hours between 20:00 and 06:00. A column done around midnight is "
         "drawn across it rather than split at 00:00. Time-of-day-only columns are at the bottom.",
-    )
-
-
-def date_calendar(report) -> Block | None:
-    """Which batches have each column, over the calendar, and where the order breaks."""
-    columns = report.order + list(report.lots)
-    dated = [i for i, d in enumerate(report.dates) if d]
-    if not columns or len(dated) < 2:
-        return None
-    broken: dict[tuple[int, str], bool] = {}
-    for i, pairs in enumerate(report.reversed_in):
-        for pair in pairs:
-            later, earlier = pair.split(" before ")
-            broken[(i, later)] = broken[(i, earlier)] = True
-    figure_ = go.Figure()
-    for flag, colour, name in ((False, INK, "has a value"), (True, ACCENT, "out of order here")):
-        xs, ys, text = [], [], []
-        for column in columns:
-            values = report.days.get(column) or report.lots.get(column)
-            for i in dated:
-                if values[i] is not None and broken.get((i, column), False) == flag:
-                    xs.append(report.dates[i])
-                    ys.append(_short(column))
-                    text.append(report.batches[i])
-        if xs:
-            figure_.add_trace(
-                go.Scatter(
-                    x=xs,
-                    y=ys,
-                    mode="markers",
-                    marker=dict(
-                        size=8, color=colour, symbol="line-ns", line=dict(color=colour, width=2)
-                    ),
-                    name=name,
-                    text=text,
-                    hovertemplate="%{text} · %{x}<br>%{y}<extra>" + name + "</extra>",
-                )
-            )
-    figure_.update_layout(showlegend=True)
-    figure_ = _style(
-        figure_,
-        "Each date column over the calendar",
-        x="the batch's anchor date",
-        height=max(300, 30 * len(columns) + 140),
-    )
-    figure_.update_yaxes(
-        categoryorder="array",
-        categoryarray=[_short(c) for c in columns],
-        autorange="reversed",
-        showgrid=False,
-    )
-    figure_.update_xaxes(showgrid=True, gridcolor=GRID)
-    return _fig(
-        figure_,
-        "One tick per batch with a value, at the batch's anchor date. A gap is a stretch of "
-        "batches without the column; an orange tick is a batch where it is out of order with "
-        "another column. Lot dates at the bottom.",
-    )
-
-
-def date_lots(report) -> Block | None:
-    """The age of each lot or material date at the anchor, over the calendar."""
-    if not report.lots:
-        return None
-    figure_ = go.Figure()
-    for n, (column, ages) in enumerate(report.lots.items()):
-        colour = INK if len(report.lots) == 1 else SERIES_COLOURS[n % len(SERIES_COLOURS)]
-        mine = [i for i, a in enumerate(ages) if a is not None and report.dates[i]]
-        figure_.add_trace(
-            go.Scatter(
-                x=[report.dates[i] for i in mine],
-                y=[ages[i] for i in mine],
-                mode="markers",
-                marker=dict(size=8, color=colour, line=dict(color="white", width=1.5)),
-                name=_short(column),
-                text=[report.batches[i] for i in mine],
-                hovertemplate="%{text} · %{x}<br>%{y:.0f} days old<extra>"
-                + _short(column)
-                + "</extra>",
-            )
-        )
-    figure_.update_layout(showlegend=len(report.lots) > 1)
-    figure_ = _style(
-        figure_,
-        "Lot and material dates: age at the anchor"
-        + (f" — {_short(next(iter(report.lots)))}" if len(report.lots) == 1 else ""),
-        x="the batch's anchor date",
-        y="days old",
-        height=300,
-    )
-    figure_.update_yaxes(rangemode="tozero")
-    return _fig(
-        figure_,
-        "Batches on the same lot sit on one rising line: the lot ages as it is used. A jump down "
-        "is a new lot.",
     )

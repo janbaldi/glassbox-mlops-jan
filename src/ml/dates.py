@@ -3,9 +3,9 @@
 A date is not a predictor: a model fitted on one learns when a batch was made, and
 says nothing about a batch made later. ``ml task new`` leaves every date column out
 of a new task (``predictors.exclude``, with why). What the dates do tell is how a
-batch went: what came after what, on which day, at what time of day, and where the
-records contradict the process. This module puts every date column of a site on one
-timeline, over the batches the missingness report counts in its statistics.
+batch went: what came after what, on which day, and at what time of day. This module
+puts every date column of a site on one timeline, over the batches the missingness
+report counts in its statistics.
 
 1. **The date columns.** Every column the catalog types ``datetime``, or whose
    values are dates, but the batch key. Each is *date and time*, *date only* (nine
@@ -20,14 +20,13 @@ timeline, over the batches the missingness report counts in its statistics.
    told as its age at the anchor, and kept off the batch's timeline.
 4. **The order.** The other columns with :data:`MIN_VALUES` values or more are
    sorted by their median hours from the anchor: the order the process runs in,
-   as the data has it. Per pair, the share of batches with both that keep that
-   order; per batch, the pairs it reverses.
+   as the data has it.
 5. **Each column.** Its usual day (the commonest) and the share on it, its spread
    (10th to 90th percentile), the median wait since the column before it, how often
    it comes before that column, whether it is the same as another column, its time
-   of day and its spread, the share on a weekend, when it was first and last
-   recorded, and whether its place drifts over the months (Spearman ρ of its hours
-   from the anchor with the anchor date, p < :data:`P_MAX`, |ρ| ≥ :data:`DRIFT_RHO`).
+   of day, the share on a weekend, when it was first and last recorded, and whether
+   its place drifts over the months (Spearman ρ of its hours from the anchor with
+   the anchor date): what dates.xlsx keeps.
 6. **Phases.** Columns next to each other in the order with the same usual day
    form a phase: what the process does on that day.
 
@@ -50,22 +49,9 @@ MODULE = "dates"
 MIN_VALUES = 20
 #: Two columns are the same when equal in this share of the batches with both.
 SAME = 0.95
-#: A column on its usual day in fewer than this share of its batches has no fixed day.
-USUAL_DAY = 0.8
-#: Significance and size for drift.
-P_MAX, DRIFT_RHO = 0.01, 0.3
 #: A date shared by batches whose anchors lie more than this many days apart (median over
 #: its shared values) is a lot's or a material's date, not the batch's.
 SHARED_DAYS = 7.0
-#: A column falls on a weekend notably more often than the anchor from this many points.
-WEEKEND_POINTS = 5.0
-#: A column first (or last) recorded this share of the batches in is introduced late
-#: (retired early).
-LATE = 0.1
-#: Times of day outside these hours are at night; a spread wider than this is any time.
-DAY_HOURS, ANY_TIME_HOURS = (6, 20), 8.0
-#: Batches named per swapped pair, and per batch the pairs it reverses.
-EXAMPLES = 5
 
 DATE_TIME, DATE_ONLY, TIME_ONLY = "date and time", "date only", "time of day only"
 KINDS = {
@@ -102,15 +88,8 @@ class DatesReport:
     clock: dict[str, list[float | None]] = field(default_factory=dict)
     #: Lot and material dates, per batch: their age at the anchor, in days.
     lots: dict[str, list[float | None]] = field(default_factory=dict)
-    #: Share of batches with both where the row column comes before the other (ties half).
-    before: list[list[float | None]] = field(default_factory=list)
-    #: Pairs reversed in at least one batch; per batch, the pairs it reverses.
-    swaps: list[dict] = field(default_factory=list)
-    reversed_in: list[list[str]] = field(default_factory=list)
     #: The phases: (usual day, columns), in order.
     phases: list[tuple[int, list[str]]] = field(default_factory=list)
-    #: What the report says in words, most telling first.
-    findings: list[str] = field(default_factory=list)
 
 
 def _hours(delta: pd.Series) -> pd.Series:
@@ -265,7 +244,6 @@ def for_build(
     ) or [f"row {i}" for i in frame.index]
     report.dates = anchor.dt.strftime("%Y-%m-%d").fillna("").tolist()
     when = anchor.map(lambda t: t.toordinal() if pd.notna(t) else np.nan).astype(float)
-    n = len(frame)
 
     # What goes on the timeline.
     hours: dict[str, pd.Series] = {}
@@ -306,42 +284,6 @@ def for_build(
             if len(counts):
                 report.usual_day[column] = int(counts.idxmax())
 
-    # The order of every pair, and what each batch reverses.
-    k = len(report.order)
-    before = np.full((k, k), np.nan)
-    report.reversed_in = [[] for _ in range(n)]
-    position = {idx: p for p, idx in enumerate(frame.index)}
-    for i, a in enumerate(report.order):
-        for j, b in enumerate(report.order):
-            both = hours[a].notna() & hours[b].notna()
-            if i == j or not both.sum():
-                continue
-            d = hours[a][both] - hours[b][both]
-            before[i, j] = float(((d < 0) + 0.5 * (d == 0)).mean())
-            if i < j:
-                flipped = d[d > 0].index
-                if len(flipped):
-                    names = [report.batches[position[idx]] for idx in flipped]
-                    for idx in flipped:
-                        report.reversed_in[position[idx]].append(f"{b} before {a}")
-                    report.swaps.append(
-                        {
-                            "Usually first": a,
-                            "Usually second": b,
-                            "Batches with both": int(both.sum()),
-                            "Reversed %": round(100 * len(flipped) / int(both.sum()), 1),
-                            "Reversed in": ", ".join(names[:EXAMPLES])
-                            + (
-                                f" and {len(names) - EXAMPLES} more"
-                                if len(names) > EXAMPLES
-                                else ""
-                            ),
-                            "Neighbours": "yes" if j == i + 1 else "",
-                        }
-                    )
-    report.before = [[_round(v, 3) for v in row] for row in before]
-    report.swaps.sort(key=lambda s: (-s["Reversed %"], s["Usually first"]))
-
     # Phases: neighbours with the same usual day.
     for column in report.order:
         day = report.usual_day.get(column, 0)
@@ -354,11 +296,10 @@ def for_build(
         _row(column, times, hours, days, index, anchor, when, report) for column in report.kinds
     ]
     rows.sort(key=lambda r: (r["Position"] is None, r["Position"] or 0, r["Parameter"]))
-    report.findings = _findings(report, rows)
     log.success(
         MODULE,
         f"{len(report.kinds):,} date columns, {len(report.order):,} on the timeline in "
-        f"{len(report.phases)} phases; {len(report.swaps)} pairs reversed in some batch",
+        f"{len(report.phases)} phases",
         " → ".join(report.order[:8]) + (" …" if len(report.order) > 8 else ""),
     )
     return rows, report
@@ -383,7 +324,6 @@ def _row(column, times, hours, days, index, anchor, when, report) -> dict:
         "Median hours from anchor": None,
         "Median wait since previous (h)": None,
         "Before previous %": None,
-        "Swaps with": "",
         "Same as": "",
         "Median time of day": "",
         "Time of day P10–P90": "",
@@ -429,14 +369,6 @@ def _row(column, times, hours, days, index, anchor, when, report) -> dict:
                 wait = h[both] - hours[previous][both]
                 row["Median wait since previous (h)"] = _round(wait.median())
                 row["Before previous %"] = round(100 * float((wait < 0).mean()), 1)
-        partners = [
-            s["Usually second"] if s["Usually first"] == column else s["Usually first"]
-            for s in report.swaps
-            if column in (s["Usually first"], s["Usually second"])
-        ]
-        row["Swaps with"] = ", ".join(partners[:EXAMPLES]) + (
-            f" and {len(partners) - EXAMPLES} more" if len(partners) > EXAMPLES else ""
-        )
     for other in report.kinds:
         if other == column:
             continue
@@ -445,200 +377,6 @@ def _row(column, times, hours, days, index, anchor, when, report) -> dict:
             row["Same as"] = other
             break
     return row
-
-
-def _findings(report: DatesReport, rows: list[dict]) -> list[str]:
-    """What the dates say, in sentences, most telling first."""
-    out: list[str] = []
-    by_name = {r["Parameter"]: r for r in rows}
-    count = {kind: sum(k == kind for k in report.kinds.values()) for kind in KINDS}
-    out.append(
-        f"{len(report.kinds)} date columns: {count[DATE_TIME]} with a time of day, "
-        f"{count[DATE_ONLY]} dates only, {count[TIME_ONLY]} times of day with no date. "
-        f"{len(report.order)} are on the timeline, from "
-        + (f"*{report.anchor}* (day 0)." if report.anchor else "each batch's first timepoint.")
-    )
-    if report.phases:
-        out.append(
-            "The process as the dates have it: "
-            + "; ".join(
-                f"**day {day}**: " + " → ".join(f"*{c}*" for c in columns)
-                for day, columns in report.phases
-            )
-            + "."
-        )
-        last = report.order[-1]
-        q = report.quantiles[last]
-        if q[2] is not None:
-            out.append(
-                f"A batch's timeline runs to *{last}*, a median of {q[2]:.1f} days after the "
-                f"anchor's midnight (from {q[0]:.1f} to {q[4]:.1f} in four batches of five)."
-            )
-    waits = [
-        (r["Median wait since previous (h)"], r["Parameter"], report.order[r["Position"] - 2])
-        for r in rows
-        if r["Median wait since previous (h)"] is not None
-    ]
-    if waits:
-        wait, column, previous = max(waits)
-        out.append(
-            f"The longest wait is between *{previous}* and *{column}*: a median of "
-            + (f"{wait / 24:.1f} days." if wait >= 48 else f"{wait:.1f} hours.")
-        )
-    loose = [
-        r
-        for r in rows
-        if r["On usual day %"] is not None
-        and r["On usual day %"] < 100 * USUAL_DAY
-        and not (r["Same as"] and r["Same as"] < r["Parameter"])
-    ]
-    for r in sorted(loose, key=lambda r: r["On usual day %"])[:6]:
-        shares = report.on_day[r["Parameter"]]
-        top = sorted(
-            ((s, report.first_day + i) for i, s in enumerate(shares) if s > 0), reverse=True
-        )[:3]
-        out.append(
-            f"*{r['Parameter']}* has no fixed day: "
-            + ", ".join(f"day {d} in {100 * s:.0f}%" for s, d in top)
-            + " of its batches."
-        )
-    for s in report.swaps[:6]:
-        out.append(
-            f"*{s['Usually second']}* comes before *{s['Usually first']}* in "
-            f"{s['Reversed %']:.0f}% of the batches with both ({s['Reversed in']})"
-            + (
-                ": the two have no fixed order."
-                if s["Reversed %"] >= 25
-                else ": a recording error, or a step not always done in the same order."
-            )
-        )
-    if len(report.swaps) > 6:
-        out.append(
-            f"{len(report.swaps) - 6} more pairs are reversed in some batch: see *The order*."
-        )
-    worst = sorted(
-        ((len(p), b) for b, p in zip(report.batches, report.reversed_in) if p), reverse=True
-    )[:3]
-    if worst and worst[0][0] > 1:
-        out.append(
-            "The batches that break the order most: "
-            + ", ".join(f"*{b}* ({count} pair{'' if count == 1 else 's'})" for count, b in worst)
-            + "."
-        )
-    for r in rows:
-        if r["Same as"] and r["Parameter"] < r["Same as"]:
-            out.append(f"*{r['Parameter']}* and *{r['Same as']}* hold the same timepoint.")
-    for r in rows:
-        if r["Drift ρ"] is None or r["Drift p"] is None:
-            continue
-        if (
-            r["Drift p"] < P_MAX
-            and abs(r["Drift ρ"]) >= DRIFT_RHO
-            and r["Parameter"] in report.days
-        ):
-            d = pd.Series(report.days[r["Parameter"]], dtype=float)
-            fifth = max(5, len(d) // 5)
-            out.append(
-                f"*{r['Parameter']}* comes {'later' if r['Drift ρ'] > 0 else 'earlier'} over the "
-                f"months (ρ {r['Drift ρ']:+.2f}): {day_text(d.head(fifth).median())} in the first "
-                f"batches, {day_text(d.tail(fifth).median())} in the last."
-            )
-    for column, ages in report.lots.items():
-        age = pd.Series(ages, dtype=float)
-        if age.notna().sum():
-            r = by_name[column]
-            drifting = (
-                r["Drift p"] is not None and r["Drift p"] < P_MAX and abs(r["Drift ρ"]) >= DRIFT_RHO
-            )
-            out.append(
-                f"*{column}* is the date of a lot or a material, shared by batches started weeks "
-                f"apart: a median of {age.median():.0f} days old at the anchor (from "
-                f"{age.min():.0f} to {age.max():.0f})"
-                + (
-                    f", {'older' if r['Drift ρ'] > 0 else 'younger'} at use over the months."
-                    if drifting
-                    else "."
-                )
-            )
-    first, last = report.dates[0] if report.dates else "", report.dates[-1] if report.dates else ""
-    for r in rows:
-        if r["Parameter"] not in report.days:
-            continue
-        has = [i for i, v in enumerate(report.days[r["Parameter"]]) if v is not None]
-        if not has or not first:
-            continue
-        n = len(report.batches)
-        if has[0] >= LATE * n:
-            out.append(
-                f"*{r['Parameter']}* is recorded from {report.dates[has[0]]} on (the batches "
-                f"start {first})."
-            )
-        if has[-1] < (1 - LATE) * n - 1:
-            out.append(
-                f"*{r['Parameter']}* is not recorded after {report.dates[has[-1]]} (the batches "
-                f"run to {last})."
-            )
-    anchored = by_name.get(report.anchor)
-    base = anchored["Weekend %"] if anchored and anchored["Weekend %"] is not None else None
-    weekend = [
-        r
-        for r in rows
-        if r["Parameter"] in report.order
-        and r["Parameter"] != report.anchor
-        and (r["Weekend %"] or 0) >= (base + WEEKEND_POINTS if base is not None else 10)
-    ]
-    if weekend:
-        out.append(
-            "On a weekend more often than the anchor"
-            + (f" ({base:.0f}% of the batches)" if base is not None else "")
-            + ": "
-            + ", ".join(f"*{r['Parameter']}* {r['Weekend %']:.0f}%" for r in weekend[:8])
-            + ": steps done by a weekend crew, or that wait for Monday."
-        )
-    night, anytime = [], []
-    for column, values in report.clock.items():
-        clock = pd.Series(values, dtype=float).dropna()
-        if len(clock) < MIN_VALUES:
-            continue
-        median = clock.median() % 24
-        if median < DAY_HOURS[0] or median >= DAY_HOURS[1]:
-            night.append(f"*{column}* (median {_clock(median)})")
-        if clock.quantile(0.9) - clock.quantile(0.1) > ANY_TIME_HOURS:
-            anytime.append(
-                f"*{column}* ({_clock(clock.quantile(0.1))}–{_clock(clock.quantile(0.9))})"
-            )
-    if night:
-        out.append("Done at night: " + ", ".join(night) + ".")
-    if anytime:
-        out.append("Done at any time of day: " + ", ".join(anytime) + ".")
-    if report.not_placed:
-        out.append(
-            "Off the timeline: "
-            + ", ".join(f"*{c}* ({why})" for c, why in report.not_placed.items())
-            + "."
-        )
-    return out
-
-
-def batch_rows(report: DatesReport) -> list[dict]:
-    """One row per batch: its anchor date, how much of the timeline it has, how far it runs,
-    and the pairs it reverses."""
-    rows = []
-    for i, batch in enumerate(report.batches):
-        values = [report.days[c][i] for c in report.order]
-        present = [v for v in values if v is not None]
-        rows.append(
-            {
-                "Batch": batch,
-                "Anchor date": report.dates[i],
-                "Date columns with a value": len(present),
-                "Last timepoint": day_text(max(present)) if present else "",
-                "Pairs reversed": len(report.reversed_in[i]),
-                "Reversed": "; ".join(report.reversed_in[i][:3])
-                + (" …" if len(report.reversed_in[i]) > 3 else ""),
-            }
-        )
-    return rows
 
 
 def day_rows(report: DatesReport) -> list[dict]:

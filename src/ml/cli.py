@@ -756,19 +756,11 @@ def _write_dates(
     content_digest: str,
     run_start: datetime,
 ) -> Path:
-    """Every date column per site (what ``ml task new`` leaves out), the pairs some batch
-    reverses, each batch's order, and each batch's place of every column on the timeline."""
+    """Every date column per site (what ``ml task new`` leaves out), and each batch's place
+    of every column on the timeline."""
     sheets = {
         screening.EVIDENCE_SHEET: [
             {"Site": site, **row} for site, (rows, _) in dated_by_site.items() for row in rows
-        ],
-        "Reversed pairs": [
-            {"Site": site, **row} for site, (_, a) in dated_by_site.items() for row in a.swaps
-        ],
-        "Batches": [
-            {"Site": site, **row}
-            for site, (_, a) in dated_by_site.items()
-            for row in dates.batch_rows(a)
         ],
         "Days": [
             {"Site": site, **row}

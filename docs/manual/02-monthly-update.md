@@ -105,51 +105,30 @@ and 10 to 30 seconds to start. Look at these sections:
 ## 5. Read the dates report
 
 Open `dates_report.html`. It puts every **date and time column** of the site on one
-timeline: what comes after what, on which day, at what time of day, and where the
-records contradict that order. It describes the same batches as the missingness
-report. Nothing here needs a decision: `ml task new` leaves every date column out of
-a new task anyway (a model fitted on a date learns when a batch was made;
-[chapter 4](04-tasks.md#1-create-a-task)). The durations the build derives from the
-dates are numbers, and stay usable. Read it for what the dates say about the
-process, and for the records that cannot be right.
+timeline: what comes after what, on which day, and at what time of day. It
+describes the same batches as the missingness report. Nothing here needs a decision:
+`ml task new` leaves every date column out of a new task anyway (a model fitted on a
+date learns when a batch was made; [chapter 4](04-tasks.md#1-create-a-task)). The
+durations the build derives from the dates are numbers, and stay usable.
 
 Days count from the **anchor** (`build.date_column`): *day 0* is the anchor's
 calendar day, *day 3* the third calendar day after it, whatever the hour.
 
-- **What the dates say.** Every finding in a sentence: the process day by day
-  (*day 0: thaw → seeding; day 3: feed; …*), the longest wait, the columns with no
-  fixed day, the pairs some batches reverse (with the batches), columns that come
-  later or earlier over the months, columns recorded only from some date on, steps
-  done at night or at any time of day, and lot dates.
-- **Explore the timeline.** Click a column to draw its place, batch by batch, over
-  the months: a step that moved shows as a jump. Click a batch to draw its timeline
-  over the typical batch's: a timepoint out of order is orange, a missing one has
-  no dot. Sort the batches by *Pairs reversed* to find the ones that break the order.
 - **The timeline.** Every column in the order the process runs in, every batch a grey
-  dot, the bar the middle half of the batches and the ringed dot the median, with the
-  calendar days as bands. The phases table names what happens on each day, and the
-  heatmap gives, per column, the share of its batches on each day: a column named
-  *Day 3 …* that is mostly on day 0 shows at once.
-- **The order.** How often each column comes before each other (above the diagonal
-  should be dark), every pair reversed in at least one batch with the batches, and
-  the batches that reverse most. A reversal is a recording error, or a step not
-  always done in the same order.
+  dot (hover for the batch), the bar the middle half of the batches and the ringed dot
+  the median, with the calendar days as bands. The phases table names what happens
+  on each day, and the heatmap gives, per column, the share of its batches on each
+  day: a column named *Day 3 …* that is mostly on day 0 shows at once, and so does a
+  step that moved from one day to the next.
 - **The time of day.** Each column's clock time, read round the clock (a step done
   around midnight is drawn across it), with the night hours shaded; the
   time-of-day-only columns are here too.
-- **Over the calendar.** Which batches have each column (a gap is a stretch without
-  it), with the batches where it is out of order in orange; and the age of each lot
-  or material date at the anchor (a vector's manufacture date: batches on one lot
-  sit on a rising line, a new lot is a jump down).
-- **Every date column.** One row per column: kind, position, usual day and the share
-  on it, median and spread, the wait since the column before it, how often it comes
-  first, what it swaps with, *Same as*, time of day, weekend share, first and last
-  recorded, and drift.
 
-A date shared by batches started weeks apart is the date of a lot or a material, not
-of the batch: it is told as its age, off the timeline. `dates.xlsx` holds every date
-column, every reversed pair, each batch's order, and each batch's place of every
-column (in days).
+A date shared by batches started weeks apart (a vector's manufacture date) is the
+date of a lot or a material, not of the batch, and is kept off the timeline.
+`dates.xlsx` holds every date column (usual day, spread, wait since the column
+before it, time of day, weekend share, first and last recorded, drift) and each
+batch's place of every column, in days.
 
 ## 6. Read the missingness report
 

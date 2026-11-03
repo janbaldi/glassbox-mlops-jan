@@ -493,153 +493,37 @@ def _missingness_help(run: BuildRun) -> dict | None:
     }
 
 
-#: The dates report's tables, with their display formats.
-_DATE_FORMATS = {
-    "Position": "%d",
-    "Usual day": "%d",
-    "On usual day %": "%.0f",
-    "Median hours from anchor": "%.1f",
-    "Median wait since previous (h)": "%.1f",
-    "Before previous %": "%.1f",
-    "Weekend %": "%.0f",
-    "Batches with a value": "%d",
-    "Coverage %": "%.0f",
-    "Drift ρ": "%+.2f",
-    "Drift p": "%.2g",
-    "Batches with both": "%d",
-    "Reversed %": "%.1f",
-    "Date columns with a value": "%d",
-    "Pairs reversed": "%d",
-}
-
-
-def _date_table(rows: list[dict], note: str = "") -> Block | None:
-    if not rows:
-        return None
-    headers = list(rows[0])
-    return sortable(
-        headers,
-        [[row[h] for h in headers] for row in rows],
-        [_DATE_FORMATS.get(h) for h in headers],
-        note=note,
-    )
-
-
-def _date_viewer(site: str, rows: list[dict], analysis: Any) -> Block | None:
-    """Click a column to see it over the months, a batch to see its timeline over the
-    typical one."""
-    if not analysis.order:
-        return None
-    columns = [r for r in rows if r["Parameter"] in analysis.order]
-    column_headers = [
-        "Parameter",
-        "Position",
-        "Usual day",
-        "On usual day %",
-        "Median",
-        "Earliest (P10)",
-        "Latest (P90)",
-        "Median wait since previous (h)",
-        "Before previous %",
-        "Median time of day",
-        "Drift ρ",
-    ]
-    batches = dates.batch_rows(analysis)
-    batch_headers = list(batches[0]) if batches else []
-    return {
-        "kind": "date_viewer",
-        "site": site,
-        "order": analysis.order,
-        "batches": analysis.batches,
-        "dates": analysis.dates,
-        "days": analysis.days,
-        "quantiles": analysis.quantiles,
-        "reversed": analysis.reversed_in,
-        "column_headers": column_headers,
-        "column_rows": [[r[h] for h in column_headers] for r in columns],
-        "column_formats": [_DATE_FORMATS.get(h) for h in column_headers],
-        "batch_headers": batch_headers,
-        "batch_rows": [[r[h] for h in batch_headers] for r in batches],
-        "batch_formats": [_DATE_FORMATS.get(h) for h in batch_headers],
-    }
-
-
-def _date_sections(site: str, rows: list[dict], analysis: Any, many: bool) -> list[dict | None]:
-    """One site's sections of the dates report."""
+def _date_sections(site: str, analysis: Any, many: bool) -> list[dict | None]:
+    """One site's sections of the dates report: the timeline, and the time of day."""
     tag = f"{site}: " if many else ""
     slug = "-" + site.lower().replace(" ", "-") if many else ""
     phases = [
-        {
-            "Phase": f"day {day}",
-            "Columns, in order": " → ".join(columns),
-            "From": dates.day_text(analysis.quantiles[columns[0]][2]),
-            "To": dates.day_text(analysis.quantiles[columns[-1]][2]),
-        }
+        [
+            f"day {day}",
+            " → ".join(columns),
+            dates.day_text(analysis.quantiles[columns[0]][2]),
+            dates.day_text(analysis.quantiles[columns[-1]][2]),
+        ]
         for day, columns in analysis.phases
     ]
-    reversers = sorted(
-        (r for r in dates.batch_rows(analysis) if r["Pairs reversed"]),
-        key=lambda r: -r["Pairs reversed"],
-    )
     return [
-        _section(
-            f"findings{slug}",
-            f"{tag}What the dates say",
-            [md("\n".join(f"- {line}" for line in analysis.findings))],
-        ),
-        _section(
-            f"viewer{slug}", f"{tag}Explore the timeline", [_date_viewer(site, rows, analysis)]
-        ),
         _section(
             f"timeline{slug}",
             f"{tag}The timeline",
             [
                 plots.date_timeline(analysis),
-                _date_table(
+                sortable(
+                    ["Phase", "Columns, in order", "From", "To"],
                     phases,
-                    "Columns next to each other in the order with the same usual day: what the "
-                    "process does on that day, from the first column's median to the last's.",
-                ),
+                    note="Columns next to each other in the order with the same usual day: what "
+                    "the process does on that day, from the first column's median to the last's.",
+                )
+                if phases
+                else None,
                 plots.date_days(analysis),
             ],
         ),
-        _section(
-            f"order{slug}",
-            f"{tag}The order",
-            [
-                plots.date_order(analysis),
-                _date_table(
-                    analysis.swaps,
-                    "Every pair reversed in at least one batch: the column that usually comes "
-                    "first, the one that usually comes second, and the batches where the second "
-                    "came first. *Neighbours*: next to each other in the order.",
-                )
-                or md("No batch reverses the order of any two columns."),
-                _date_table(
-                    reversers,
-                    "The batches that reverse at least one pair, most first.",
-                ),
-            ],
-        ),
         _section(f"clock{slug}", f"{tag}The time of day", [plots.date_clock(analysis)]),
-        _section(
-            f"calendar{slug}",
-            f"{tag}Over the calendar",
-            [plots.date_calendar(analysis), plots.date_lots(analysis)],
-        ),
-        _section(
-            f"columns{slug}",
-            f"{tag}Every date column",
-            [
-                _date_table(
-                    rows,
-                    "Every date column: the ones on the timeline in their order (*Position*), "
-                    "then the lot dates and the times of day. Days count from the anchor's "
-                    "midnight; *Drift* is Spearman's ρ of the hours from the anchor (a lot's "
-                    "age) with the anchor date.",
-                )
-            ],
-        ),
     ]
 
 
@@ -652,11 +536,8 @@ def _dates_help(run: BuildRun) -> dict | None:
             md(
                 "#### Reading the report\n\n"
                 "The report is about one site (config.yaml's site:) and puts every date column "
-                "on one timeline: what comes after what, on which day, at what time of day, and "
-                "where the records contradict the order. *What the dates say* puts the findings "
-                "in words. In *Explore the timeline*, click a column to draw it over the months, "
-                "or a batch to draw its timeline over the typical one: a batch's timepoint out of "
-                "order with another is orange. Hover any mark for its batch.\n\n"
+                "on one timeline: what comes after what, on which day, and at what time of "
+                "day. Hover a grey dot for its batch.\n\n"
                 "#### Dates are not predictors\n\n"
                 "A model fitted on a date learns when a batch was made, and says nothing about "
                 "a batch made later. `ml task new` leaves every date column out of a new task, "
@@ -671,8 +552,8 @@ def _dates_help(run: BuildRun) -> dict | None:
                     [
                         esc(dates.LOT),
                         "A date shared by batches started more than "
-                        f"{dates.SHARED_DAYS:g} days apart: a lot's or a material's, told as its "
-                        "age at the anchor.",
+                        f"{dates.SHARED_DAYS:g} days apart: a lot's or a material's, kept off "
+                        "the timeline.",
                     ]
                 ],
             ),
@@ -685,27 +566,15 @@ def _dates_help(run: BuildRun) -> dict | None:
                 "batch's first timepoint. *Day 0* is the anchor's calendar day: a timepoint on "
                 "*day 3* falls on the third calendar day after it, whatever the hour.\n"
                 f"- **Order.** The columns with {dates.MIN_VALUES} values or more are sorted by "
-                "their median hours from the anchor. The heatmap gives, per pair, the share of "
-                "batches with both where the row comes first (equal times count half).\n"
-                "- **Usual day** is the commonest day; a column on it in fewer than "
-                f"{dates.USUAL_DAY:.0%} of its batches has no fixed day. **Phases** are columns "
-                "next to each other in the order with the same usual day.\n"
-                "- **Wait since previous**: the median of a batch's hours between the column and "
-                "the one before it in the order; *Before previous*: how often it is negative.\n"
-                f"- **Same as**: equal to another column in {dates.SAME:.0%} of the batches with "
-                "both.\n"
+                "their median hours from the anchor.\n"
+                "- **Usual day** is the commonest day of a column. **Phases** are columns next "
+                "to each other in the order with the same usual day.\n"
                 "- **Time of day** is read round the clock: the clock is cut at its emptiest "
                 "hour rather than at midnight, so a step done around midnight keeps its times "
-                f"together. Before {dates.DAY_HOURS[0]:02d}:00 or from {dates.DAY_HOURS[1]}:00 "
-                f"is night; a 10th–90th percentile spread wider than {dates.ANY_TIME_HOURS:g} "
-                "hours is any time of day.\n"
-                "- **Drift**: Spearman's ρ of the hours from the anchor (a lot's age) with the "
-                f"anchor date, named when p < {dates.P_MAX} and |ρ| ≥ {dates.DRIFT_RHO}.\n"
-                "- **Recorded from / not after**: a column whose first value comes "
-                f"{dates.LATE:.0%} of the batches in, or whose last comes {dates.LATE:.0%} "
-                "before the end.\n"
-                "- **Weekend**: the share of a column's values on a Saturday or Sunday, named "
-                f"when {dates.WEEKEND_POINTS:g} points above the anchor's."
+                "together.\n"
+                "- `dates.xlsx` keeps every date column with its usual day, spread, wait since "
+                "the column before it, time of day, weekend share, first and last recorded and "
+                "drift, and each batch's place of every column."
             ),
         ],
     }
@@ -1263,8 +1132,8 @@ def build_dates_payload(run: BuildRun) -> dict[str, Any]:
     many = len(run.dates) > 1
     sections = [
         section
-        for site, (rows, analysis) in run.dates.items()
-        for section in _date_sections(site, rows, analysis, many)
+        for site, (_, analysis) in run.dates.items()
+        for section in _date_sections(site, analysis, many)
     ] + [_provenance(run)]
     found = "; ".join(
         f"{site}: {len(a.kinds)} date columns, {len(a.order)} on the timeline in "
@@ -1275,8 +1144,8 @@ def build_dates_payload(run: BuildRun) -> dict[str, Any]:
     return {
         "title": "Batch table dates",
         "lead": f"Every date column of {' and '.join(run.merge.site_rows)} on one timeline: what "
-        "comes after what, on which day, at what time of day, and where the records "
-        "contradict the order. `ml task new` leaves every date column out of a new task. "
+        "comes after what, on which day, and at what time of day. `ml task new` leaves every "
+        "date column out of a new task. "
         + (found or "No date columns")
         + "."
         + (" Batches described — " + "; ".join(cohorts) + "." if cohorts else ""),

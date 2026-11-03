@@ -13,7 +13,6 @@ tree and hand each block to Streamlit.
 import datetime
 import html
 import json
-import math
 import re
 from pathlib import Path
 
@@ -817,173 +816,6 @@ def render_timeline(segments: dict, drawn: list, key: str) -> None:
     st.plotly_chart(figure, width="stretch", key=f"timeline{key}")
 
 
-#: The dates viewer's ink: one batch, the typical spread behind it, and out of order.
-DATE_INK, DATE_SPREAD, DATE_ACCENT = "#2c3e50", "#c9d1d9", "#eb6834"
-
-
-def _date_column_figure(block: dict, column: str) -> go.Figure:
-    """One column's place on the timeline, batch by batch, over the months."""
-    values = block["days"][column]
-    mine = [i for i, v in enumerate(values) if v is not None and block["dates"][i]]
-    figure = go.Figure(
-        go.Scatter(
-            x=[block["dates"][i] for i in mine],
-            y=[values[i] for i in mine],
-            mode="markers",
-            marker=dict(size=8, color=DATE_INK, line=dict(color="white", width=1.5)),
-            text=[block["batches"][i] for i in mine],
-            hovertemplate="%{text} · %{x}<br>day %{y:.2f}<extra></extra>",
-            name=column,
-        )
-    )
-    median = block["quantiles"][column][2]
-    if median is not None:
-        figure.add_hline(
-            y=median,
-            line=dict(color=DATE_SPREAD, width=2, dash="dot"),
-            annotation_text=f"median, day {median:.2f}",
-            annotation_position="top left",
-        )
-    low = min((values[i] for i in mine), default=0)
-    high = max((values[i] for i in mine), default=1)
-    for day in range(math.floor(low), math.ceil(high) + 1):
-        if day % 2 == 0:
-            figure.add_hrect(y0=day, y1=day + 1, fillcolor="rgba(44,62,80,0.05)", line_width=0)
-    figure.update_layout(
-        title=dict(text=f"{column}: its place on the timeline, batch by batch", x=0),
-        xaxis_title="the batch's anchor date",
-        yaxis_title="days from the anchor's midnight",
-        height=380,
-        margin=dict(l=10, r=10, t=50, b=10),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-        showlegend=False,
-    )
-    return figure
-
-
-def _date_batch_figure(block: dict, index: int) -> go.Figure:
-    """One batch's timeline over the typical batch's."""
-    order = block["order"]
-    late = {part for pair in block["reversed"][index] for part in pair.split(" before ")}
-    figure = go.Figure()
-    for row, column in enumerate(order):
-        p10, p25, _, p75, p90 = block["quantiles"][column]
-        if p10 is None:
-            continue
-        figure.add_trace(
-            go.Scatter(
-                x=[p10, p90],
-                y=[row, row],
-                mode="lines",
-                hoverinfo="skip",
-                showlegend=False,
-                line=dict(color=DATE_SPREAD, width=1.5),
-            )
-        )
-        figure.add_trace(
-            go.Scatter(
-                x=[p25, p75],
-                y=[row, row],
-                mode="lines",
-                hoverinfo="skip",
-                line=dict(color=DATE_SPREAD, width=8),
-                showlegend=row == 0,
-                name="the typical batch: middle half, 10th–90th percentile",
-            )
-        )
-    points = [
-        (row, column, block["days"][column][index])
-        for row, column in enumerate(order)
-        if block["days"][column][index] is not None
-    ]
-    figure.add_trace(
-        go.Scatter(
-            x=[x for _, _, x in points],
-            y=[row for row, _, _ in points],
-            mode="lines+markers",
-            line=dict(color=DATE_INK, width=2),
-            marker=dict(
-                size=10,
-                color=[DATE_ACCENT if c in late else DATE_INK for _, c, _ in points],
-                line=dict(color="white", width=2),
-            ),
-            text=[c for _, c, _ in points],
-            hovertemplate="%{text}: day %{x:.2f}<extra></extra>",
-            name="this batch (orange: out of order)",
-        )
-    )
-    figure.update_layout(
-        title=dict(
-            text=f"{block['batches'][index]} ({block['dates'][index]}) against the typical batch",
-            x=0,
-        ),
-        xaxis_title="days from the anchor's midnight",
-        height=max(320, 32 * len(order) + 140),
-        margin=dict(l=10, r=10, t=80, b=10),
-        legend=dict(orientation="h", x=0, y=1.02, yanchor="bottom"),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(0,0,0,0)",
-    )
-    figure.update_yaxes(
-        tickvals=list(range(len(order))), ticktext=order, autorange="reversed", showgrid=False
-    )
-    figure.update_xaxes(dtick=1, gridcolor="rgba(44,62,80,0.12)")
-    return figure
-
-
-def render_date_viewer(block: dict, key: str) -> None:
-    """The figure on top; below it the date columns in order and the batches: click a column
-    to see its place over the months, a batch to see its timeline over the typical one."""
-    plot = f"plot{key}"
-    draw: dict = {}
-    top = st.container()
-    with st.expander(f"Date columns, in order ({len(block['column_rows'])})", expanded=True):
-        table = f"dcols{key}"
-        columns, _ = _pick_table(
-            block["column_headers"],
-            block["column_rows"],
-            block["column_formats"],
-            table,
-            plot,
-            tick=False,
-        )
-        draw[table] = lambda i: [("column", columns.iloc[i]["Parameter"])]
-        st.markdown(
-            '<p class="batch_table-caption">Click a column to draw its place on the timeline, '
-            "batch by batch, over the months.</p>",
-            unsafe_allow_html=True,
-        )
-    with st.expander(f"Batches ({len(block['batch_rows'])})", expanded=False):
-        table = f"dbatches{key}"
-        batches, _ = _pick_table(
-            block["batch_headers"],
-            block["batch_rows"],
-            block["batch_formats"],
-            table,
-            plot,
-            tick=False,
-        )
-        draw[table] = lambda i: [("batch", block["batches"].index(batches.iloc[i]["Batch"]))]
-        st.markdown(
-            '<p class="batch_table-caption">Click a batch to draw its timeline over the typical '
-            "batch's; sort by <i>Pairs reversed</i> to find the ones that break the order.</p>",
-            unsafe_allow_html=True,
-        )
-    with top:
-        drawn = _drawn(plot, draw)
-        if not drawn:
-            st.caption("Click a column or a batch in a table below to draw it here.")
-            return
-        what, which = drawn[0]
-        figure = (
-            _date_column_figure(block, which)
-            if what == "column"
-            else _date_batch_figure(block, which)
-        )
-        st.plotly_chart(figure, width="stretch", key=f"dates{key}")
-
-
 def render_shift_viewer(block: dict, key: str) -> None:
     """The groups over time of the row clicked; below, the groups and parameters to click."""
     labels = [site["label"] for site in block["sites"]]
@@ -1098,8 +930,6 @@ def render_block(block: dict, key: str) -> None:
         render_missing_viewer(block, key)
     elif kind == "shift_viewer":
         render_shift_viewer(block, key)
-    elif kind == "date_viewer":
-        render_date_viewer(block, key)
     elif kind == "chooser":
         labels = [option["label"] for option in block["options"]]
         chosen = st.selectbox(block["label"], labels, key=f"pick{key}")
