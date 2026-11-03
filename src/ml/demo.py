@@ -924,6 +924,38 @@ def _stage(parameter: str) -> str:
     return ""
 
 
+#: The made-up catalog's 'Variable Role', by key; every other parameter is a process
+#: parameter, and a calculated feature a derived one.
+ROLES = {
+    "Identifier": ("patient_id",),
+    "Timestamp": DATETIME_KEYS,
+    "Material lot ID": ("vector_lot", "media_lot", "cytokine_lot"),
+    "Equipment ID": ("incubator_id",),
+    "Context / design factor": (
+        "manufacturing_site",
+        "clinical_site",
+        "clinical_site_id",
+        "country",
+        "batch_type",
+        "team",
+    ),
+    "Disposition label": ("disposition", "oos_type"),
+    "CQA / release result": ("sterility", "mycoplasma", "mycoplasma_method"),
+}
+
+
+def _role(parameter: str) -> str:
+    """The made-up catalog's 'Variable Role' column, which a new task selects by."""
+    if parameter == BATCH:
+        return "Identifier"
+    if parameter in feature_parameters():
+        return "Derived feature"
+    for role, keys in ROLES.items():
+        if parameter in {c(key) for key in keys}:
+            return role
+    return "Process parameter"
+
+
 def catalog(first: pd.DataFrame, second: pd.DataFrame) -> pd.DataFrame:
     """The catalog: every parameter the batch table may hold, and the type it holds.
 
@@ -968,6 +1000,7 @@ def catalog(first: pd.DataFrame, second: pd.DataFrame) -> pd.DataFrame:
             "Parameter": list(parameters),
             "Value Type": [_value_type(p) for p in parameters],
             "Available At": [_stage(p) for p in parameters],
+            "Variable Role": [_role(p) for p in parameters],
         }
     )
 

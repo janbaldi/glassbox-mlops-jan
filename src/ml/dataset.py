@@ -555,6 +555,16 @@ def _category_exclusions(catalog: pd.DataFrame, spec: TaskSpec) -> dict[str, str
                 f"(it has {', '.join(map(str, catalog.columns))})"
             )
         values = catalog[column].fillna("").astype(str).str.strip()
+        # A misspelt value matches nothing, and would leave its parameters in unnoticed.
+        unknown = [c for c in categories if c not in set(values)]
+        if unknown:
+            log.warn(
+                MODULE,
+                f"predictors.{key}: no catalog parameter has '{column}' "
+                + ", ".join(f"'{c}'" for c in unknown)
+                + " — check the spelling against the catalog",
+                "the catalog's values: " + ", ".join(sorted(set(values) - {""})[:20]),
+            )
         keep = key == "include_by_catalog"
         for parameter, value in zip(catalog["Parameter"].astype(str), values):
             if (value in categories) != keep:

@@ -110,9 +110,7 @@ def test_the_build_writes_the_shifts_report_and_table_and_finds_the_demo_lots(bu
 def test_a_new_task_can_leave_out_every_parameter_that_runs_in_groups(built, tmp_path):
     folder = tmp_path / "no_lots"
     config = str(built["config_path"])
-    # Lots are identifiers too; kept here, so the shifts list stands on its own.
-    new = ["--config", config, "task", "new", "--keep-identifiers"]
-    assert cli.main([*new, str(folder), "--exclude-shifting"]) == 0
+    assert cli.main(["--config", config, "task", "new", str(folder), "--exclude-shifting"]) == 0
     text = (folder / "task.yaml").read_text(encoding="utf-8")
     assert "Run in groups over time at a manufacturing site, as the build of" in text
     excluded = dict(taskconfig.load(folder / "task.yaml").predictors.exclude)
@@ -121,7 +119,7 @@ def test_a_new_task_can_leave_out_every_parameter_that_runs_in_groups(built, tmp
     assert f"at {names.site('a')} plant" in why and names.site("b") not in why
     # Without the option, nothing that runs in groups is listed.
     plain = tmp_path / "plain"
-    assert cli.main([*new, str(plain)]) == 0
+    assert cli.main(["--config", config, "task", "new", str(plain)]) == 0
     assert c("media_lot") not in dict(taskconfig.load(plain / "task.yaml").predictors.exclude)
 
 

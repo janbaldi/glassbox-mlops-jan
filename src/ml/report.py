@@ -10,11 +10,10 @@ way.
 Each stage answers the question it is for. The catalog report: what do the sources
 record that the schema has never been told about. The build report: what came
 out, what the data needed doing to it, where every parameter came from, and which
-catalog parameters the batch table still does not have. The build's identifiers,
-dates, missingness, correlation and shifts reports: which parameters name a batch
-rather than describe it, in what order and on which day a batch's dates fall, which
-go missing together, rank the batches alike, or run in groups over time, and what to
-screen.
+catalog parameters the batch table still does not have. The build's dates,
+missingness, correlation and shifts reports: in what order and on which day a batch's
+dates fall, which parameters go missing together, rank the batches alike, or run in
+groups over time, and what to screen.
 The tasks report: which batches are in the cohort, what each parameter became,
 and what every column of the dataset means.
 """
@@ -33,7 +32,6 @@ from . import (
     correlation,
     dates,
     decorrelate,
-    identifiers,
     missingness,
     plots,
     screening,
@@ -87,8 +85,6 @@ class BuildRun:
     unmapped_sites: list[str] = field(default_factory=list)
     source_rows: list[list[str]] = field(default_factory=list)
     run_start: datetime = field(default_factory=datetime.now)
-    #: site → :func:`ml.identifiers.for_build` over its batches: one row per column found
-    identifiers: dict[str, tuple[list[dict], Any]] = field(default_factory=dict)
     #: site → :func:`ml.dates.for_build` over its batches: one row per date column
     dates: dict[str, tuple[list[dict], Any]] = field(default_factory=dict)
     #: site → :func:`ml.missingness.for_build` over its batches: one row per column, the groups
@@ -97,8 +93,7 @@ class BuildRun:
     correlation: dict[str, tuple[list[dict], Any]] = field(default_factory=dict)
     #: site → :func:`ml.shifts.for_build` over the same batches
     shifts: dict[str, tuple[list[dict], Any]] = field(default_factory=dict)
-    #: Which screening register the identifiers, missingness and correlation reports show,
-    #: or why none.
+    #: Which screening register the missingness and correlation reports show, or why none.
     register_note: str = ""
 
 
@@ -420,7 +415,7 @@ def _missing_viewer(run: BuildRun) -> dict | None:
 
 def _register_view(analysis: Any) -> dict:
     """What a report's viewer shows of the register at a site: its own exclusions (which it
-    can reinstate), the other reports', and the conflicts."""
+    can reinstate), the other report's, and the conflicts."""
     return {
         "screened": analysis.screened,
         "elsewhere": analysis.elsewhere,
@@ -429,7 +424,7 @@ def _register_view(analysis: Any) -> dict:
 
 
 def _excluded_counts(members: list[str], analysis: Any) -> list[int]:
-    """How many of a group's members this report excludes, and how many the others do."""
+    """How many of a group's members this report excludes, and how many the other one does."""
     return [
         sum(m in analysis.screened for m in members),
         sum(m in analysis.elsewhere and m not in analysis.screened for m in members),
@@ -493,156 +488,6 @@ def _missingness_help(run: BuildRun) -> dict | None:
             table(
                 ["Pattern", "Meaning"],
                 [[esc(kind), meaning] for kind, meaning in missingness.PATTERNS.items()],
-            ),
-        ],
-    }
-
-
-#: The identifiers report's parameter tables, with their display formats.
-_IDENTIFIER_FORMATS = {
-    "Batches with a value": "%d",
-    "Distinct values": "%d",
-    "Distinct %": "%.1f",
-    "Most batches with one value": "%d",
-    "|ρ| with the date": "%.3f",
-}
-
-
-def _identifier_viewer(run: BuildRun) -> dict | None:
-    """Per site: the identifiers and the possible identifiers, to tick for a proposal, and
-    the values of the one clicked."""
-    sites = []
-    for site, (rows, analysis) in run.identifiers.items():
-        # A site with nothing found is still shown: that is a finding, and what it screened
-        # out before can still be reinstated.
-        rows = [
-            {"Parameter": row["Parameter"], "Register": row.get("Register", "")}
-            | {k: v for k, v in row.items() if k != "Status"}
-            for row in rows
-        ]
-        status = {r["Parameter"]: r["Status"] for r in run.identifiers[site][0]}
-        headers = list(rows[0]) if rows else ["Parameter", "Register", "Kind", "Signs"]
-
-        def table_of(wanted: str) -> list[list]:
-            return [[row[h] for h in headers] for row in rows if status[row["Parameter"]] == wanted]
-
-        sites.append(
-            {
-                "label": site,
-                "batches": analysis.batches,
-                "dates": analysis.dates,
-                "values": analysis.values,
-                **_register_view(analysis),
-                "groups": {},
-                "kinds": {row["Parameter"]: row["Kind"] for row in rows},
-                "reason_of": dict(identifiers.REASON_OF),
-                "headers": headers,
-                "rows": table_of(identifiers.IDENTIFIER),
-                "possible_rows": table_of(identifiers.POSSIBLE),
-                "formats": [_IDENTIFIER_FORMATS.get(h) for h in headers],
-                "not_analysed": [[p, why] for p, why in sorted(analysis.not_analysed.items())],
-            }
-        )
-    block = missing_viewer(sites, kind="id_viewer")
-    if block is not None:
-        block["proposal"] = {
-            "columns": list(screening.PROPOSAL_COLUMNS),
-            "actions": list(screening.ACTIONS),
-            "reasons": list(screening.TRACK_REASONS[screening.IDENTIFIERS]),
-            "report": screening.IDENTIFIERS,
-        }
-    return _section("viewer", "Identifiers and free text", [block])
-
-
-def _identifiers_help(run: BuildRun) -> dict | None:
-    if not run.identifiers:
-        return None
-    analysis = next(iter(run.identifiers.values()))[1]
-    words = ", ".join(f"*{w}*" for w in sorted(identifiers.ID_WORDS))
-    return {
-        "title": "Method",
-        "blocks": [
-            md(
-                "#### Reading the report\n\n"
-                "The report is about one site (config.yaml's site:). Each row is a parameter "
-                "that names something (a batch, a patient, a lot, a document, a piece of "
-                "equipment) rather than describes the batch. Click a row to list its value in "
-                "every batch, in date order. ⊘ marks a parameter this report already excludes "
-                "here, ◇ one the missingness or correlation report excludes.\n\n"
-                "- **Identifiers** are clear. `ml task new` leaves every one of them out of a "
-                "new task, listed under `predictors.exclude` with why (`--keep-identifiers` "
-                "keeps them). To keep one in every new task, tick it and propose *reinstate*; "
-                "to leave one out of the tasks you have already, propose *exclude*.\n"
-                "- **Possible identifiers** show one sign only: an equipment code or a grade "
-                "looks like this and may be a category worth keeping. They are yours to decide: "
-                "tick the ones no task should use, open *Propose a screening decision* and "
-                "download the proposal. `ml screening add proposal.csv` adds it to the register, "
-                "and every task leaves them out from then on, with the decision as the reason. "
-                "One you do not propose stays in.\n\n"
-                "Read this report first: what it finds need not be looked at in the others.\n\n"
-                "#### Why leave them out\n\n"
-                "A value that names something lets a model tell batches, lots or months apart, "
-                "never learn what made a batch turn out as it did. Fitted on it, a model scores "
-                "well on the batches it has seen and has nothing to say about a new one. The "
-                "batch key (*Patient Lot/Batch #*) is every task's identifier already, kept "
-                "next to the data rather than in it, so it is not listed."
-            ),
-            md("#### What is found"),
-            table(
-                ["Kind", "Meaning", "Proposed as"],
-                [
-                    [esc(kind), meaning, esc(identifiers.REASON_OF[kind])]
-                    for kind, meaning in identifiers.KINDS.items()
-                ],
-            ),
-            md(
-                "#### The signs\n\n"
-                "*Signs* says which of these a column shows; each is about the values or the "
-                "name, never about one particular column.\n\n"
-                "- **Code-shaped.** At least "
-                f"{identifiers.CODE_SHARE:.0%} of its values are one token (no space) with a "
-                f"digit in it, and at least {identifiers.SHAPE_SHARE:.0%} share one shape: "
-                "letters read as `A`, digits as `9`, so `XY-104` and `QR-7` are both `A-9`. "
-                "Numbers are not codes, unless the catalog types the column categorical and "
-                f"they have {identifiers.CODE_DIGITS} digits or more.\n"
-                f"- **Named as one.** A word of its name is one of {words}, or the name has a "
-                "`#`. For a numerical column, *number*, *nr* and *num* do not count: they "
-                "usually count something.\n"
-                "- **From an identifier source.** The build joined it from a source that holds "
-                "identifiers only: " + ", ".join(f"*{s}*" for s in identifiers.SOURCES) + ".\n"
-                "- **Counts with the date.** The number in its values (the last run of digits) "
-                "rises or falls with the batch date: Spearman |ρ| of at least "
-                f"{identifiers.TIME_RHO} over at least {identifiers.MIN_VALUES} batches and "
-                f"{identifiers.MIN_NUMBERS} distinct numbers (*|ρ| with the date*). A lot "
-                "numbered in order does this, whether or not it runs in groups (that is the "
-                "shifts report's question).\n\n"
-                "#### How the kinds are decided\n\n"
-                "The site is analysed on its own batches: the batches the missingness report "
-                "counts in its statistics. Every column of the batch table takes part, "
-                "whatever the screening register says of it, except the batch key, the date "
-                "the batches are ordered by, and dates (catalog type *datetime*, or values "
-                f"that are dates). A column needs {identifiers.MIN_VALUES} batches with a value "
-                "and two distinct values; *Not judged*, in the viewer, lists the others and "
-                "why. *Distinct %* is its distinct values over its batches with a value.\n\n"
-                "- **Words and codes** (values that are not numbers, or a column the catalog "
-                "types categorical), in this order: *free text* when its values have a median "
-                f"of at least {identifiers.TEXT_WORDS} words and at least "
-                f"{analysis.near_unique:.0%} are distinct; a *unique code* when at least "
-                f"{analysis.unique:.0%} are distinct, a *near-unique code* when at least "
-                f"{analysis.near_unique:.0%} are (`build.identifier_unique` and "
-                "`build.identifier_near_unique` in config.yaml); a *sequential code* (counts "
-                "with the date) or a *lot or reference code* when it comes from an identifier "
-                "source or shows two of code-shaped, named as one and counts with the date; a "
-                "*possible identifier* when it is code-shaped or named as one. Numbers kept as "
-                "text count as numbers.\n"
-                "- **Numbers.** A *running number* when its values are whole, at least "
-                f"{analysis.unique:.0%} distinct, and count with the date at |ρ| "
-                f"{identifiers.SEQUENCE_RHO} or more; a *lot or reference code* when it comes "
-                "from an identifier source; a *sequential code* when whole, named as one and "
-                "counting with the date; a *possible identifier* when whole and named as one. "
-                "Any other number describes the batch, however many values it has.\n"
-                "- A column with one value is not reported. *Most batches with one value* "
-                "shows how far a code is from naming a single batch."
             ),
         ],
     }
@@ -881,7 +726,7 @@ _GROUPED_FORMATS = {
 
 
 def _usable_representative(group: Any, elsewhere: dict) -> str:
-    """The best-scoring member no other report excludes: ``= suggested`` when that
+    """The best-scoring member the other report does not exclude: ``= suggested`` when that
     is the suggestion, empty when there is none."""
     usable = [m for m in group.members if m not in elsewhere]
     if not usable:
@@ -992,8 +837,7 @@ def _correlation_help(run: BuildRun) -> dict | None:
                 "(the representative by default) against each of the others. Parameters "
                 "that rank the batches alike lie along a rising or falling curve. ⊘ marks a "
                 "parameter this report already excludes here (as "
-                f"*{correlation.REASON}*), ◇ one the identifiers or missingness report "
-                "excludes. "
+                f"*{correlation.REASON}*), ◇ one the missingness report excludes. "
                 "*Excluded here* and *Excluded elsewhere* count them per group.\n\n"
                 "To keep only a group's representative, tick the group (or several) and open "
                 "*Propose a screening decision*: exclude, with the representative chosen under "
@@ -1041,11 +885,11 @@ def _correlation_help(run: BuildRun) -> dict | None:
                 "stays usable in every task. A task's *task_catalog.xlsx* (written by `ml task "
                 "new`) lists what that task can still use, and what each representative stands "
                 "for.\n\n"
-                "A representative another report excludes would leave its whole group "
+                "A representative the missingness report excludes would leave its whole group "
                 "out: a **conflict**. `ml screening add` refuses to make one; a decision at `all` "
                 "made from the other site's build can, and then a ⚠ banner names it here, in the "
-                "other reports, in `ml screening status` and in every task. *Best usable "
-                "representative* is the best-scoring member the other reports leave in: "
+                "missingness report, in `ml screening status` and in every task. *Best usable "
+                "representative* is the best-scoring member the missingness report leaves in: "
                 "pick it under *Represented by* to resolve one. To move a group to another "
                 "representative, tick the group and pick it: the proposal reinstates it and "
                 "excludes the others, represented by it."
@@ -1414,31 +1258,6 @@ def build_batch_table_payload(run: BuildRun) -> dict[str, Any]:
     }
 
 
-def build_identifiers_payload(run: BuildRun) -> dict[str, Any]:
-    """The build's identifiers report: the first to read, before the missingness report."""
-    found = ", ".join(
-        f"{site}: {sum(r['Status'] == identifiers.IDENTIFIER for r in rows):,} identifiers and "
-        f"{sum(r['Status'] == identifiers.POSSIBLE for r in rows):,} possible identifiers "
-        f"among {a.tested:,} parameters"
-        for site, (rows, a) in run.identifiers.items()
-    )
-    return _grouped_payload(
-        run,
-        run.identifiers,
-        _identifier_viewer(run),
-        "Batch table identifiers",
-        "Which parameters name something rather than describe the batch at "
-        f"{' and '.join(run.merge.site_rows)}: patient and case codes, lot and reference "
-        "codes, running numbers, free text. A model can only memorise them. `ml task new` "
-        "leaves the identifiers out of a new task; the possible identifiers are yours to "
-        "screen out. Read this before the other reports. Found — "
-        + (found or "none")
-        + ". "
-        + run.register_note,
-        _identifiers_help(run),
-    )
-
-
 def build_dates_payload(run: BuildRun) -> dict[str, Any]:
     """The build's dates report: every date column on one timeline, and all it shows."""
     many = len(run.dates) > 1
@@ -1502,7 +1321,7 @@ def _grouped_payload(
     lead: str,
     help_: dict | None,
 ) -> dict[str, Any]:
-    """The identifiers, correlation or shifts report, laid out as the missingness report is."""
+    """The correlation or shifts report, laid out as the missingness report is."""
     sections = [viewer, _provenance(run)]
     cohorts = [f"{site}: {a.cohort}" for site, (_, a) in results.items() if a.cohort]
     return {

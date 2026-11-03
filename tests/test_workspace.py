@@ -294,12 +294,6 @@ def test_the_env_file_beside_the_config_is_loaded_with_it(tmp_path, monkeypatch)
         ({"build": {"missingness_cohort": {"value": "x", "column": "y", "on": 1}}}, "cohort.on"),
         ({"tasks": {"target": "x"}}, "unknown setting"),
         ({"build": {"correlation_threshold": 1.5}}, "build.correlation_threshold"),
-        ({"build": {"identifier_unique": 0}}, "build.identifier_unique"),
-        ({"build": {"identifier_near_unique": "half"}}, "build.identifier_near_unique"),
-        (
-            {"build": {"identifier_unique": 0.6, "identifier_near_unique": 0.8}},
-            "build.identifier_near_unique: expected at most",
-        ),
     ],
 )
 def test_a_config_that_cannot_be_used_is_refused_by_field(tmp_path, change, field):
@@ -470,6 +464,41 @@ def test_a_category_column_the_catalog_does_not_have_is_refused():
     catalog = pd.DataFrame({"Parameter": ["x"], "Value Type": ["numeric"], "Category": ["QC"]})
     with pytest.raises(dataset.TaskRefused, match="no 'Categroy' column"):
         dataset._category_exclusions(catalog, spec)
+
+
+def test_a_category_value_no_catalog_row_has_is_warned_about(caplog):
+    spec = taskconfig.parse(
+        {
+            "task": {"name": "t"},
+            "target": {"column": "y"},
+            "predictors": {"exclude_by_catalog": {"Category": ["QC", "Identifer"]}},
+        },
+        Path("."),
+    )
+    catalog = pd.DataFrame(
+        {"Parameter": ["x", "y"], "Value Type": ["numeric"] * 2, "Category": ["QC", "Identifier"]}
+    )
+    assert dataset._category_exclusions(catalog, spec) == {"x": "Catalog 'Category' is 'QC'"}
+    assert "no catalog parameter has 'Category' 'Identifer'" in caplog.text
+    assert "'QC'" not in caplog.text.split("no catalog parameter has")[1].split("—")[0]
+
+
+def test_a_new_task_leaves_out_the_roles_that_cannot_explain_a_batch(built, tmp_path):
+    from ml import scaffold
+
+    folder = tmp_path / "roles"
+    assert cli.main(["--config", str(built["config_path"]), "task", "new", str(folder)]) == 0
+    spec = taskconfig.load(folder / "task.yaml")
+    assert dict(spec.predictors.exclude_by_catalog) == {"Variable Role": scaffold.EXCLUDED_ROLES}
+    assert len(scaffold.EXCLUDED_ROLES) == 9 and "Identifier" in scaffold.EXCLUDED_ROLES
+    # The catalog rows with those roles are not among the task's usable inputs.
+    catalog = pd.read_excel(shared(built["directory"], built["config"], "catalog"))
+    role = dict(zip(catalog["Parameter"], catalog["Variable Role"]))
+    usable = set(pd.read_excel(folder / "task_catalog.xlsx")["Parameter"])
+    assert usable and not any(role.get(p) in scaffold.EXCLUDED_ROLES for p in usable)
+    for parameter in (c("patient_id"), c("vector_lot"), c("incubator_id"), c("date_start")):
+        assert role[parameter] in scaffold.EXCLUDED_ROLES and parameter not in usable
+    assert any(role.get(p) == "Process parameter" for p in usable)
 
 
 # ---------------------------------------------------------------------------

@@ -42,7 +42,6 @@ import numpy as np
 import pandas as pd
 from scipy import stats
 
-from .identifiers import is_date
 from .logger import log
 
 MODULE = "dates"
@@ -116,6 +115,30 @@ class DatesReport:
 
 def _hours(delta: pd.Series) -> pd.Series:
     return delta.dt.total_seconds() / 3600.0
+
+
+def _mostly(parsed: pd.Series, present: int) -> bool:
+    """Whether nine values in ten parsed."""
+    return present > 0 and parsed.notna().sum() >= 0.9 * present
+
+
+def is_date(values: pd.Series, value_type: str) -> bool:
+    """Whether a column holds dates: the catalog says ``datetime``, or nine values in ten read
+    as dates. Numbers, and numbers kept as text, are not dates, however a parser reads them."""
+    if value_type == "datetime" or pd.api.types.is_datetime64_any_dtype(values):
+        return True
+    if pd.api.types.is_numeric_dtype(values):
+        return False
+    present = values.dropna()
+    if present.map(lambda v: isinstance(v, (pd.Timestamp, np.datetime64))).all():
+        return len(present) > 0
+    text = present.astype(str)
+    # Numbers kept as text are numbers, however a date parser reads them ("12.5" is 5 December).
+    if _mostly(pd.to_numeric(text, errors="coerce"), len(text)) or text.str.fullmatch(r"\d+").any():
+        return False
+    parsed = pd.to_datetime(text, errors="coerce", format="mixed")
+    # A short code such as "M3" parses as a time on 1 January of year 1: not a date.
+    return _mostly(parsed.where(parsed.dt.year >= 1900), len(text))
 
 
 def parse(values: pd.Series) -> pd.Series:

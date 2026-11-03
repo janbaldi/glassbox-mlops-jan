@@ -13,13 +13,12 @@ through it again. Each site's outputs go into a folder named after it.
 
 1. `ml validate`: the setup still works.
 2. `ml check-catalog`: the sources record nothing the catalog doesn't know about, or you add it.
-3. `ml build`: the batch table, the build report, and the identifiers, dates, missingness, correlation and shifts reports.
+3. `ml build`: the batch table, the build report, and the dates, missingness, correlation and shifts reports.
 4. Read the build report.
-5. Read the identifiers report: decide on the possible identifiers, and screen out the ones no task should use ([chapter 3](03-screening.md)).
-6. Read the dates report: every date column on one timeline, in order, by day and by time of day.
-7. Read the missingness report, then the correlation and shifts reports, and record any screening decision.
-8. `ml screening status`: no standing decision is contradicted by the new data.
-9. Rerun the tasks you maintain ([chapter 4](04-tasks.md)).
+5. Read the dates report: every date column on one timeline, in order, by day and by time of day.
+6. Read the missingness report, then the correlation and shifts reports, and record any screening decision ([chapter 3](03-screening.md)).
+7. `ml screening status`: no standing decision is contradicted by the new data.
+8. Rerun the tasks you maintain ([chapter 4](04-tasks.md)).
 
 Run every command from the repository (or any folder below it), as `uv run ml …`.
 The *Monthly update* route of [the workflow map](../workflow.html) shows these
@@ -67,8 +66,6 @@ Written to SharePoint — 40 batches × 227 columns
   batch table (Parquet)  batch_data.parquet
   report                 build_report.html
   missingness table      missingness.xlsx
-  identifiers report     identifiers_report.html
-  identifiers table      identifiers.xlsx
   dates report           dates_report.html
   dates table            dates.xlsx
   missingness report     missingness_report.html
@@ -105,63 +102,7 @@ and 10 to 30 seconds to start. Look at these sections:
 | **Catalog coverage** | Catalog parameters that are not in the batch table, and why: no source supplies it, or a calculated feature is blocked (an input missing, or a setting it waits for). And, collapsed, the ones this site never records. |
 | **Run log** | Every warning of the run. |
 
-## 5. Read the identifiers report
-
-Open `identifiers_report.html` first. It lists the parameters that **name something
-rather than describe the batch**: a patient or case code, a raw material,
-consumable or vector lot, a reference to a document, a piece of equipment, a running
-number, a comment. A model can tell batches, lots or months apart by them, never
-learn what made a batch turn out as it did. It describes the same batches as the
-missingness report (below), and judges every column of the batch table but the
-batch key (every task's identifier already, kept next to the data), the date, and
-the dates. The rules are general: they look at the values and the name, never at
-a particular column.
-
-It splits what it finds in two:
-
-- **Identifiers** are clear. `ml task new` leaves every one of them out of a new
-  task, listed under `predictors.exclude` with why ([chapter 4](04-tasks.md#1-create-a-task)).
-  Nothing to do, unless one is wrong: then tick it and propose **reinstate**, and new
-  tasks keep it. To leave one out of the tasks you already have too, propose
-  **exclude**.
-- **Possible identifiers** show one sign only, so they may as well be a category
-  worth keeping (an equipment code, a grade such as `G2`). **They are yours to
-  decide**: tick the ones no task should use, propose **exclude**, and run
-  `ml screening add`. Every task leaves them out from then on.
-
-The *Signs* column says why each one is listed:
-
-| Sign | What it means |
-|---|---|
-| code-shaped | Nine values in ten are one token with a digit in it, four in five of one shape (`XY-104` and `QR-7` are both `A-9`). |
-| named as one | A word of the name is *lot, batch, id, code, serial, barcode, ref, reference, number, …*, or the name has a `#`. |
-| from an identifier source | Joined from the raw materials and consumables export, which holds identifiers only. |
-| counts with the date | The number in the value rises or falls with the batch date (\|ρ\| ≥ 0.8): a lot numbered in order, whether or not it runs in groups. |
-
-| Kind | Status | What it is |
-|---|---|---|
-| Unique code | identifier | A different value in at least 95% of the batches: a patient code, a case number. |
-| Near-unique code | identifier | At least 50%: more categories than any encoder can learn from. |
-| Running number | identifier | Whole numbers, at least 95% distinct, counting with the date (\|ρ\| ≥ 0.95). |
-| Sequential code | identifier | A code whose number counts with the date, and one more sign. |
-| Lot or reference code | identifier | From an identifier source, or code-shaped and named as one. |
-| Free text | identifier | Sentences (a median of 3 words or more), at least 50% distinct. Proposed as `free text`. |
-| Possible identifier | possible | Code-shaped, or named as one: not both. |
-
-A column with one value is not listed. The 95% and 50% are
-`build.identifier_unique` and `build.identifier_near_unique` in `config.yaml`.
-
-The tables work as in the other reports. **Click a row** to list the parameter's
-value in every batch, in date order, and check it is what its *Kind* says. **Tick**
-rows and open **Propose a screening decision**: the reason is set from what you
-ticked (`identifier`, or `free text`). Download the proposal and run
-`ml screening add` ([chapter 3](03-screening.md#recording-a-decision)). The
-*Register* column, *Screened out at this site* and *Screened out by the other
-reports* work as in the missingness report; *Not judged* (collapsed) lists the
-columns that take no part, and why. `identifiers.xlsx` in the same folder holds
-every row, which `ml task new` reads.
-
-## 6. Read the dates report
+## 5. Read the dates report
 
 Open `dates_report.html`. It puts every **date and time column** of the site on one
 timeline: what comes after what, on which day, at what time of day, and where the
@@ -210,7 +151,7 @@ of the batch: it is told as its age, off the timeline. `dates.xlsx` holds every 
 column, every reversed pair, each batch's order, and each batch's place of every
 column (in days).
 
-## 7. Read the missingness report
+## 6. Read the missingness report
 
 Open `missingness_report.html`. It describes **commercial batches only**: at
 Ghent the batches whose `Type` is `Commercial`, at Raritan every batch. Of those,
@@ -220,7 +161,7 @@ plot but counted nowhere else. Both rules are `build.missingness_cohort` in
 `config.yaml`. **About this report** in the sidebar says how many batches the
 analysis covers.
 
-The sidebar names the site. The tables work the same way in every report:
+The sidebar names the site. The tables work the same way in all three reports:
 **click a row** to draw it (the row is shaded), and **tick the box** at the
 start of rows, in any of the tables, to propose a screening decision about
 them. The page has these parts:
@@ -230,24 +171,23 @@ them. The page has these parts:
   newest on the right. Missing cells are blue, or **green for a batch whose
   manufacturing is not completed**: a gap there may just mean "not measured
   yet". A ⊘ before a name marks a parameter this report screened out at this
-  site, ◇ one the identifiers or correlation report screened out. Hover a cell for its batch and
+  site, ◇ one the correlation report screened out. Hover a cell for its batch and
   date.
 - **⚠ Screening conflict** (only when there is one). A correlation
   representative that is excluded itself, which leaves its whole group out:
   resolve it in the correlation report ([chapter 3](03-screening.md#how-it-works)).
 - **The group table.** Parameters that go missing together. Click a group to
   draw all its members. *Excluded here* counts the members this report already
-  screened out, *Excluded elsewhere* the ones the other reports did.
+  screened out, *Excluded elsewhere* the ones the correlation report did.
 - **Screened out at this site.** This report's standing exclusions at the site:
   decision, date, reason, rationale. Click one to draw it; tick it to reinstate
   it.
-- **Screened out by the other reports** (collapsed). The identifiers and
-  correlation reports' exclusions here, each with its report and (for a
-  correlation one) its representative: shown, not changed here.
+- **Screened out by the correlation report** (collapsed). That report's
+  exclusions here, with their representative: shown, not changed here.
 - **The parameter table** (collapsed). Every parameter missing on at least one
   batch at this site and in no group (those are in the group table), with its
   **pattern**, its statistics and, in the **Screening** column, every standing
-  decision on it at this site, from every report, and what it represents. Click
+  decision on it at this site, from either report, and what it represents. Click
   one to draw it.
 - **Propose a screening decision.** Turns everything you ticked, in every table, into a
   `proposal.csv` ([chapter 3](03-screening.md#recording-a-decision)).
@@ -286,7 +226,7 @@ The parameter table lists only the parameters in no group, each with its closest
 parameter; click one to draw it against its closest. Tick
 several to propose, for each, that its closest parameter is excluded as
 `correlated with group`, represented by the ticked one. The **Register** column
-says what the register already holds, from every report: *excluded S-… (missingness:
+says what the register already holds, from either report: *excluded S-… (missingness:
 retired)*, *excluded S-… (correlation: …, represented by …)*, or *represents …*. The same
 goes for the missingness report: a parameter in a group is in the group table,
 not the parameter table.
@@ -301,15 +241,15 @@ not the parameter table.
   members, weighted by how many of their batches it has a value on), mean and
   weakest |ρ|, the fewest batches a pair shares, and the weakest pair's q
   (Benjamini-Hochberg adjusted p-value), the **best usable representative** (the
-  best-scoring member the other reports leave in; `= suggested` when that
+  best-scoring member the missingness report leaves in; `= suggested` when that
   is the suggestion), and *Excluded here* / *Excluded elsewhere*. A group is
   drawn from its representative.
-- **Screened out at this site, the other reports' exclusions, the parameter
+- **Screened out at this site, the other report's exclusions, the parameter
   table and the proposal** work as in the missingness report, ⊘ and ◇ too. To
   **represent a group by one parameter**, tick the
   group (or several groups): the proposal form sets the reason `correlated with
   group` and, per group, *Represented by* to the suggestion (change it if you
-  know better; it refuses one another report excludes). The proposal
+  know better; it refuses one the missingness report excludes). The proposal
   excludes every other member and records the representative in the register;
   the representative stays usable. To move a group to another representative,
   tick it and pick the new one: the proposal also reinstates it.
@@ -360,7 +300,7 @@ tick. To leave all of them out of a task, the grouped ones too, create it with
 `shifts.xlsx`. One the register already screens out is listed once, as
 screened.
 
-## 8. Check the standing decisions
+## 7. Check the standing decisions
 
 ```bash
 uv run ml screening status
@@ -381,11 +321,10 @@ new build. It lists a decision
 when the parameter is measured again after being *retired* or *never recorded*,
 when its missing rate moved by 20 points or more, when it is no longer in the
 batch table, when the parameter that represents it is screened out too, or when
-its review date has passed, or when the identifiers report no longer finds a
-parameter it screened out. Nothing changes until you
+its review date has passed. Nothing changes until you
 decide: see [Changing your mind](03-screening.md#changing-your-mind).
 
-## 9. Rerun your tasks
+## 8. Rerun your tasks
 
 ```bash
 uv run ml task run --task tasks/expression

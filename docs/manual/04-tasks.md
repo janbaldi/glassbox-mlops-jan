@@ -45,8 +45,8 @@ the parameters this task can use as input features. They are chosen exactly as
 `ml task run` chooses its predictors, on the latest batch table: everything the
 catalog lists and the batch table has, minus the target and what is computed
 from it, the roles (id, group, patient), the task file's own exclusions (the
-screened ones, the identifiers, the dates and, with `--exclude-shifting`, the
-shifting parameters among them),
+screened ones, the dates and, with `--exclude-shifting`, the shifting parameters
+among them),
 catalog-category rules, what the register excludes at the task's sites, and the
 site-relative features. Its *Represents* column names what each correlation
 representative stands in for at the task's sites; the other columns are the
@@ -73,28 +73,32 @@ itself. If a decision is later reinstated, the run warns that the task still
 excludes the parameter: delete the line to use it again. A line for a site your
 task doesn't use can be deleted too.
 
-**Identifiers are left out by default.** `ml task new` lists every clear
-identifier the latest build's identifiers report found at the site (patient and
-case codes, lot and reference codes, running numbers, free text), read from
-`identifiers.xlsx`, each with why:
+**Some catalog roles are left out by default.** Every new `task.yaml` leaves out each
+parameter whose catalog **Variable Role** says it cannot explain how a batch turned
+out, or is only known at or after release:
 
 ```yaml
-    # Identifiers at this site, as the build of 2026-10-21 14:03 found them
-    # (identifiers_report.html): they name a batch, a lot or a document rather than
-    # describe the batch. Delete a line to use the parameter again, or reinstate it
-    # in the identifiers report so new tasks keep it.
-    - {column: "Medium lot", reason: "identifier (lot or reference code: from Raw materials and consumables; code-shaped (A-9); named as one ('lot'))"}
+  exclude_by_catalog:              # {catalog column: [values left out]}
+    Variable Role:
+      - "Identifier"
+      - "Timestamp"
+      - "Context / design factor"
+      - "CQA / release result"
+      - "Disposition label"
+      - "Equipment ID"
+      - "Material lot ID"
+      - "Post-release logistics"
+      - "Setpoint / plan"
 ```
 
-One the register reinstated in the identifiers report is not listed. The
-*possible* identifiers are not listed either: they are left out only once you
-screen them out ([chapter 2](02-monthly-update.md#5-read-the-identifiers-report)).
-`--keep-identifiers` lists none. Without a build to read, `ml task new` warns and
-lists none.
+Delete a value to use its parameters in this task. The values must match the
+catalog's exactly: a value no catalog row has matches nothing, and the run warns
+about it, with the values the catalog does have. A catalog without a *Variable
+Role* column refuses the run: delete the block, or add the column.
 
-**Date columns are left out by default** too, read from the latest build's
+**Date columns are left out by default**, read from the latest build's
 `dates.xlsx`: a model fitted on a date learns when a batch was made
-([chapter 2](02-monthly-update.md#6-read-the-dates-report)). The durations derived
+([chapter 2](02-monthly-update.md#5-read-the-dates-report)). The durations derived
 from them are numbers, and stay in. `--keep-dates` lists none:
 
 ```yaml
@@ -112,7 +116,7 @@ To also leave out every parameter that runs in groups over time, as a lot does
 uv run ml task new tasks/car_expression_no_lots --target "Product CAR expression (%)" --exclude-shifting
 ```
 
-One already listed as screened, as an identifier or as a date is listed once. It lists them from the latest build's `shifts.xlsx`, at any manufacturing site,
+One already listed as screened or as a date is listed once. It lists them from the latest build's `shifts.xlsx`, at any manufacturing site,
 each with why, a group of parameters that change on the same days one after the
 other:
 
