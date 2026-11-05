@@ -67,8 +67,15 @@ def built(tmp_path_factory) -> dict:
         about = config if spec.site == "a" else config_b
         packages[spec.name] = cli.run_task(about, spec)
 
+    # Every site in one batch table, written into a folder of its own.
+    cli.run_build(config, all_sites=True)
+    all_sites = on_share(directory, workspace.all_sites_batch_table(config))
+
     catalog_folder = workspace.catalog_folder(config)
     return {
+        "batch_table_all": pd.read_excel(all_sites),
+        "test_lots_all": pd.read_excel(all_sites.parent / cli.LV_COA_TEST_LOTS),
+        "all_sites_folder": all_sites.parent,
         "directory": directory,
         "config": config,
         "config_path": Path(config["__path__"]),

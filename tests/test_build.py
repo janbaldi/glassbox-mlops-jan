@@ -428,6 +428,7 @@ def test_the_build_writes_everything_into_the_batch_table_folder_on_sharepoint(b
     assert {path.name for path in folder.iterdir()} == {
         "batch_data.xlsx",
         "batch_data.parquet",
+        "lv_coa_test_lots.xlsx",
         "build_report.html",
         "dates_report.html",
         "dates.xlsx",
@@ -448,6 +449,7 @@ def test_the_build_writes_everything_into_the_batch_table_folder_on_sharepoint(b
     assert {entry["path"] for entry in record["outputs"]} == {
         "batch_data.xlsx",
         "batch_data.parquet",
+        "lv_coa_test_lots.xlsx",
         "build_report.html",
         "dates_report.html",
         "dates.xlsx",
@@ -456,4 +458,42 @@ def test_the_build_writes_everything_into_the_batch_table_folder_on_sharepoint(b
         "correlation_report.html",
         "shifts_report.html",
         "shifts.xlsx",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Vector certificate test lots, and every site in one build
+# ---------------------------------------------------------------------------
+def test_a_certified_lot_no_batch_used_is_a_test_lot_and_not_in_the_batch_table(built):
+    from conftest import shared
+
+    lot = c("vector_lot")
+    test_lots = pd.read_excel(
+        shared(built["directory"], built["config"], "batch_table", "lv_coa_test_lots.xlsx")
+    )
+    # Site A was made with LV-101 and LV-102 only; LV-104 has no certificate.
+    assert set(test_lots[lot]) == {"LV-103", dummy_data.TEST_LOT}
+    assert dummy_data.TEST_LOT not in set(built["batch_table"][lot])
+    # Its certificate values, and the features computed from them.
+    row = test_lots.set_index(lot).loc[dummy_data.TEST_LOT]
+    assert row[c("coa_prefix") + c("coa_titer")] == pytest.approx(3.25e7)
+    assert row[f"{c('coa_prefix')}{c('coa_ph')} Abs Deviation"] == pytest.approx(0.0)
+    assert row[c("coa_prefix") + cs("coa_impurities")[0] + " below LOQ"] == 1
+    assert c("coa_prefix") + c("coa_delivered_dose") in test_lots.columns
+    # The same columns the batch table has from the certificate.
+    coa = [name for name in test_lots.columns if name != lot]
+    assert set(coa) <= set(built["batch_table"].columns) | {
+        name for name in coa if built["batch_table"].get(name) is None
+    }
+
+
+def test_all_sites_build_one_batch_table_and_the_lots_no_site_used(built):
+    every = built["batch_table_all"]
+    assert set(every["Site Merged"]) == {names.site("a"), names.site("b")}
+    assert len(every) == dummy_data.SITE_A_BATCHES + dummy_data.SITE_B_BATCHES
+    # Site B was made with LV-103, so only the lot no site used is a test lot.
+    assert list(built["test_lots_all"][c("vector_lot")]) == [dummy_data.TEST_LOT]
+    assert built["all_sites_folder"].name == "All sites"
+    assert {"batch_data.xlsx", "lv_coa_test_lots.xlsx", "build_report.html"} <= {
+        path.name for path in built["all_sites_folder"].iterdir()
     }

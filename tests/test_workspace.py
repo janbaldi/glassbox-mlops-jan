@@ -177,8 +177,8 @@ def test_sharepoint_locations_come_from_the_config(tmp_path, monkeypatch):
     ]
     maps = workspace.site_map_sources(config)
     assert [m.location.name for m in maps] == ["first.xlsx", "second.xlsx", "third.xlsx"]
-    # The certificate workbook keeps its two rows of furniture above the header.
-    assert workspace.source(config, "lv_coa").header == 2
+    # The certificate workbook has its header in the first row, as every source does.
+    assert workspace.source(config, "lv_coa").header == 0
 
 
 def test_outputs_are_uploaded_into_the_folder_of_their_stage(tmp_path, monkeypatch):

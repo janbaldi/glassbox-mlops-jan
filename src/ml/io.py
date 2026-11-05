@@ -30,8 +30,9 @@ MODULE = "io"
 #: The value types the catalog may declare, besides a bracketed ordinal category list.
 VALUE_TYPES = frozenset({"numeric", "categorical", "datetime", "duration", "ratio", "boolean"})
 
-#: Rows of workbook furniture above the header, where a source has any.
-DEFAULT_HEADERS = {"lv_coa": 2}
+#: Rows of workbook furniture above the header, where a source has any. None has any
+#: now: the vector certificates workbook keeps its header in the first row too.
+DEFAULT_HEADERS: dict[str, int] = {}
 
 
 def read_table(path: str | Path, sheet: str | int = 0, header: int = 0) -> pd.DataFrame:
@@ -405,14 +406,23 @@ def load_lv_coa(
     df = _read(as_source(lv_coa, "lv_coa"), "vector certificates of analysis")
     log.success(MODULE, f"Vector certificates loaded — {len(df):,} rows × {df.shape[1]} columns")
 
-    # --- drop section-marker columns (headers "1".."5","42","42 ", empty) ---
-    marker = [
-        c
-        for c in df.columns
-        if isinstance(c, (int, float, np.integer)) or (isinstance(c, str) and c.strip().isdigit())
-    ]
-    if marker:
-        df.drop(columns=marker, inplace=True)
+    # The header is the first row and the workbook has no empty columns. A column
+    # without a header (pandas calls it "Unnamed: n") is one added by mistake.
+    unnamed = [c for c in df.columns if str(c).startswith("Unnamed:")]
+    if unnamed:
+        log.warn(
+            MODULE,
+            f"Vector certificates: {len(unnamed)} columns have no header and were left out",
+            ", ".join(map(str, unnamed)),
+        )
+        df.drop(columns=unnamed, inplace=True)
+    if col("coa_lot") not in df.columns:
+        raise ValueError(
+            f"Vector certificates: no '{col('coa_lot')}' column — the header must be the "
+            f"first row of the workbook (it has {', '.join(map(str, df.columns[:8]))}, …)"
+        )
+    # The lot column first: it becomes the vector lot the batches are joined on.
+    df = df[[col("coa_lot")] + [c for c in df.columns if c != col("coa_lot")]].copy()
 
     df[col("coa_lot")] = df[col("coa_lot")].astype("string").str.strip()
     df = df[df[col("coa_available")] == value("coa_available_yes")].copy()

@@ -73,6 +73,7 @@ cd demo
 uv run ml validate                 # is the setup sound? reads, writes nothing
 uv run ml check-catalog            # what do the sources record that the catalog lacks?
 uv run ml build                    # site A's batch table and its reports
+uv run ml build --all-sites        # every site in one batch table, in 'All sites/'
 uv run ml screening status         # what is screened out at site A today
 uv run ml task run --task tasks/expression
 ```

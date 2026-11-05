@@ -170,6 +170,34 @@ def merge_lv_coa(
     return coverage, added
 
 
+def lv_coa_test_lots(phf: dict[str, pd.DataFrame], df_lv_coa: pd.DataFrame) -> pd.DataFrame:
+    """The certificates of the vector lots no batch built here was made with.
+
+    These lots have no batch records, raw materials or anything else a batch brings,
+    so they have no row in the batch table; they are kept apart, with every
+    certificate column and the features derived from them, as the vector lots a
+    model can be tried on. Which batches count is the build's: one site's, or every
+    site's (``ml build --all-sites``) — a lot only another site used is not a test lot
+    there, but is one of a single site's build.
+    """
+    lot = col("vector_lot")
+    used: set[str] = set()
+    for df in phf.values():
+        if lot in df.columns:
+            used |= set(normalise_key(df[lot]).dropna())
+    keys = normalise_key(df_lv_coa[lot])
+    out = df_lv_coa.loc[keys.notna() & ~keys.isin(used)].copy()
+    out[lot] = normalise_key(out[lot])
+    out = out.drop_duplicates().sort_values(lot, kind="stable").reset_index(drop=True)
+    log.info(
+        MODULE,
+        f"{len(out)} of {keys.nunique()} certified vector lots have no batch in "
+        f"{' or '.join(phf)}: kept apart as test lots",
+        ", ".join(map(str, out[lot].head(20))),
+    )
+    return out
+
+
 def merge_raw_materials(
     phf: dict[str, pd.DataFrame],
     df_raw: pd.DataFrame,

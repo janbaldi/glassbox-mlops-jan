@@ -471,9 +471,7 @@ def _sequential_linear(
     return frame, fits
 
 
-def stability(
-    values: pd.DataFrame, groups: list[list[str]], params: TaskParams
-) -> list[float]:
+def stability(values: pd.DataFrame, groups: list[list[str]], params: TaskParams) -> list[float]:
     """How often each group comes back when the clustering is redone on subsamples.
 
     A group found on 21 batches can hang on two or three of them. Redrawing 80%
@@ -511,7 +509,8 @@ def summary(numeric: pd.DataFrame, members: list[str], representative: str, meth
 def score(df: pd.DataFrame, fitted: dict) -> pd.Series:
     """A group's score for any rows: the mean over the members each row has."""
     parts = [
-        fitted["signs"][c] * (pd.to_numeric(df[c], errors="coerce") - fitted["means"][c])
+        fitted["signs"][c]
+        * (pd.to_numeric(df[c], errors="coerce") - fitted["means"][c])
         / fitted["scales"][c]
         for c in fitted["means"]
         if c in df.columns

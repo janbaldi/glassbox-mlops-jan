@@ -326,7 +326,7 @@ def site_name(config: dict[str, Any]) -> str:
     return names.site(site_key(config))
 
 
-def location(config: dict[str, Any], label: str) -> share.Location:
+def location(config: dict[str, Any], label: str, sited: bool = True) -> share.Location:
     """Where ``label`` is on SharePoint, with the sheet its data is on (or a CSV's delimiter).
 
     The batch table is the site's own: ``<its folder>/<site name>/<its name>``, so
@@ -341,15 +341,34 @@ def location(config: dict[str, Any], label: str) -> share.Location:
     sheet = entry.get("sheet", names.sheet(label, 0))
     sep = entry.get("sep")
     found = share.Location(str(entry["drive_id"]), str(entry["path"]), sheet, sep)
-    if label == "batch_table":
+    if label == "batch_table" and sited:
         return _in_site_folder(found, config)
     return found
 
 
-def _in_site_folder(file: share.Location, config: dict[str, Any]) -> share.Location:
-    """The same file name, in a folder named after the site, inside the file's own folder."""
+def _in_site_folder(
+    file: share.Location, config: dict[str, Any], name: str | None = None
+) -> share.Location:
+    """The same file name, in a folder named after the site (or ``name``), inside the file's
+    own folder."""
     folder = file.folder.path
-    return replace(file, path=f"{folder}{site_name(config)}/{file.path[len(folder) :]}")
+    name = name or site_name(config)
+    return replace(file, path=f"{folder}{name}/{file.path[len(folder) :]}")
+
+
+#: The folder, next to the sites' own, that ``ml build --all-sites`` writes into.
+ALL_SITES_FOLDER = "All sites"
+
+
+def all_sites_batch_table(config: dict[str, Any]) -> share.Location:
+    """Where ``ml build --all-sites`` writes the batch table of every site together: the
+    same file name, in an ``All sites`` folder beside the sites' own."""
+    return _in_site_folder(location(config, "batch_table", sited=False), config, ALL_SITES_FOLDER)
+
+
+def for_site(config: dict[str, Any], key: str) -> dict[str, Any]:
+    """The same config, about another site."""
+    return {**config, "site": key}
 
 
 def source(config: dict[str, Any], label: str) -> io.Source:

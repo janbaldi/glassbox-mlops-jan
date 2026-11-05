@@ -118,6 +118,8 @@ BUILD_OUTPUTS = {
     "shifts table": "shifts.xlsx",
     "manifest": "batch_table_manifest.json",
 }
+#: The certificates of the vector lots no batch built was made with, beside the batch table.
+LV_COA_TEST_LOTS = "lv_coa_test_lots.xlsx"
 #: Written next to a new task's task.yaml: the catalog rows it can use as input features.
 TASK_CATALOG = "task_catalog.xlsx"
 
@@ -350,29 +352,44 @@ def _build_inputs(key: str) -> tuple[str, ...]:
 DATE_COLUMN = "incubator_in_d0"
 
 
-def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> share.Location:
+def run_build(
+    config: dict[str, Any],
+    config_path: str | Path | None = None,
+    all_sites: bool = False,
+) -> share.Location:
     """Build the batch table of the configured site (``site:``), and write it with its report.
 
     Reads that site's batch records and what joins onto them from SharePoint, and
-    writes the batch table, its Parquet copy, the reports and the manifest into the
-    site's folder next to ``sharepoint.batch_table``. The catalog parameters the
-    site never records are left out of the table. Returns where the report went.
+    writes the batch table, its Parquet copy, the vector lots no batch used
+    (:data:`LV_COA_TEST_LOTS`), the reports and the manifest into the site's folder
+    next to ``sharepoint.batch_table``. The catalog parameters the site never records
+    are left out of the table. Returns where the report went.
+
+    ``all_sites`` builds every site's batches into one table instead, written into an
+    ``All sites`` folder beside the sites' own; ``site:`` is then not consulted.
     """
     run_start = datetime.now()
     mark = log.mark()
-    key = workspace.site_key(config)
-    inputs = _build_inputs(key)
+    keys = workspace.SITE_KEYS if all_sites else (workspace.site_key(config),)
+    inputs = tuple(dict.fromkeys(label for key in keys for label in _build_inputs(key)))
     workspace.require(config, ("vocabulary", *inputs, "batch_table"))
     params = features.Params(**(config.get("features") or {}))
     log.stage("Batch table build")
     workspace.load_vocabulary(config)
-    the_site = names.site(key)
-    log.info(MODULE, f"Building the batch table of {the_site} only (site: {key})")
+    the_sites = tuple(names.site(key) for key in keys)
+    if all_sites:
+        log.info(MODULE, f"Building one batch table of every site: {', '.join(the_sites)}")
+    else:
+        log.info(MODULE, f"Building the batch table of {the_sites[0]} only (site: {keys[0]})")
     rules = workspace.load_corrections(config)
 
     src = {label: workspace.source(config, label) for label in inputs}
-    site_maps = workspace.site_map_sources(config) if key == "b" else []
-    target_table = workspace.location(config, "batch_table")
+    site_maps = workspace.site_map_sources(config) if "b" in keys else []
+    target_table = (
+        workspace.all_sites_batch_table(config)
+        if all_sites
+        else workspace.location(config, "batch_table")
+    )
     folder = target_table.folder
     write_parquet = (config.get("build") or {}).get("write_parquet", True)
     date_column = (config.get("build") or {}).get("date_column", DATE_COLUMN)
@@ -380,10 +397,12 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
     outputs = {"batch table": target_table.name}
     if write_parquet:
         outputs["batch table (Parquet)"] = parquet_name
+    outputs["vector certificate test lots"] = LV_COA_TEST_LOTS
     outputs.update(BUILD_OUTPUTS)
     _show_reads([*src.values(), *site_maps])
     _show_writes(folder, outputs)
-    _check_catalog_is_current(config)
+    for key in keys:
+        _check_catalog_is_current(workspace.for_site(config, key))
 
     # ── Load ───────────────────────────────────────────────────────────────
     log.section("01 · Loading")
@@ -391,32 +410,36 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
     catalog_cols = list(catalog_frame["Parameter"])
     catalog_mapping = dict(zip(catalog_frame["Parameter"], catalog_frame["Value Type"]))
 
-    raw = io.load_phf(src[f"phf_site_{key}"], key)
-    sources = [src["catalog"].record(catalog_frame), src[f"phf_site_{key}"].record(raw)]
+    sources = [src["catalog"].record(catalog_frame)]
     origins: dict[str, list[str]] = {}
     source_rows = [["Catalog", f"{len(catalog_cols):,}", f"{catalog_frame.shape[1]}", "loaded"]]
-    if key == "b":
-        # Site B's records name their columns its own way: renamed to the catalog's.
-        mapping = io.load_site_mapping(src["param_mapping"], exclude=_mapping_exclude(config))
-        records = io.apply_column_mapping(raw, mapping)
-        df_remfg = io.load_remanufacturing_supplement(src["remfg"])
-        records = io.attach_supplement(
-            records, df_remfg, "Patient Lot/Batch #", [names.col("prior_lines")]
-        )
-        sources += [
-            src["param_mapping"].record(_mapping_table(mapping)),
-            src["remfg"].record(df_remfg),
-        ]
-        source_rows.append(
-            [
-                "Re-manufacturing supplement",
-                f"{len(df_remfg):,}",
-                f"{df_remfg.shape[1]:,}",
-                "loaded",
+    phf: dict[str, pd.DataFrame] = {}
+    for key in keys:
+        raw = io.load_phf(src[f"phf_site_{key}"], key)
+        sources.append(src[f"phf_site_{key}"].record(raw))
+        if key == "b":
+            # Site B's records name their columns its own way: renamed to the catalog's.
+            mapping = io.load_site_mapping(src["param_mapping"], exclude=_mapping_exclude(config))
+            records = io.apply_column_mapping(raw, mapping)
+            df_remfg = io.load_remanufacturing_supplement(src["remfg"])
+            records = io.attach_supplement(
+                records, df_remfg, "Patient Lot/Batch #", [names.col("prior_lines")]
+            )
+            sources += [
+                src["param_mapping"].record(_mapping_table(mapping)),
+                src["remfg"].record(df_remfg),
             ]
-        )
-    else:
-        records = raw
+            source_rows.append(
+                [
+                    "Re-manufacturing supplement",
+                    f"{len(df_remfg):,}",
+                    f"{df_remfg.shape[1]:,}",
+                    "loaded",
+                ]
+            )
+        else:
+            records = raw
+        phf[names.site(key)] = records
 
     lv_coa = config.get("lv_coa") or {}
     df_lv_coa = io.load_lv_coa(
@@ -432,12 +455,12 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
     # changes the site table in place.
     sources += [src["lv_coa"].record(df_lv_coa), src["raw_materials"].record(df_raw)]
 
-    phf = {the_site: records}
     site_shapes = {site: df.shape for site, df in phf.items()}
 
     # Where every column came from, collected as the columns arrive.
-    origins[f"{the_site} batch records"] = sorted(map(str, records.columns))
-    if key == "b":
+    for the_site, records in phf.items():
+        origins[f"{the_site} batch records"] = sorted(map(str, records.columns))
+    if "b" in keys:
         origins["Re-manufacturing supplement"] = [names.col("prior_lines")]
     source_rows += [
         [
@@ -470,6 +493,8 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
         phf, catalog_cols, enabled=bool((config.get("sources") or {}).get("databricks"))
     )
     lv_coa_coverage, coa_columns = enrich.merge_lv_coa(phf, df_lv_coa)
+    # The certified lots no batch here was made with: not in the batch table, kept apart.
+    test_lots = enrich.lv_coa_test_lots(phf, df_lv_coa)
     origins["Vector certificate of analysis"] = coa_columns
     origins["Raw materials and consumables"] = enrich.merge_raw_materials(phf, df_raw)
     unmapped_sites, site_columns = enrich.enrich_clinical_sites(phf, site_maps)
@@ -493,8 +518,9 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
     origins["Merge"] = ["Site Merged"]
     # Keyed by the site, as every report and the evidence workbook are.
     cohorts, described = {}, {}
-    for site in (the_site,):
-        batches, cohort = _missingness_cohort(result, site, config)
+    for site in phf:
+        at_site = result[result["Site Merged"] == site]
+        batches, cohort = _missingness_cohort(at_site, site, config)
         analysed, counted = _analysed_batches(batches, site, config)
         cohorts[site] = batches, analysed
         described[site] = "; ".join(filter(None, (cohort, counted)))
@@ -540,9 +566,12 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
         analysis.cohort = missing_by_site[site][1].cohort
         correlated_by_site[site] = rows, analysis
     shifted_by_site = _shifts_by_subsite(subsites, names.col(date_column))
-    register, register_note = _read_register(the_site, list(result.columns), config)
-    decisions = screening.for_site(register.decisions, the_site) if register else []
-    _show_register(decisions, the_site, missing_by_site, correlated_by_site)
+    register, register_note = _read_register(the_sites, list(result.columns), config)
+    # In the register's order: the last decision that covers a parameter is the one that stands.
+    decisions = (
+        [d for d in register.decisions if d.site in (*the_sites, screening.ALL)] if register else []
+    )
+    _show_register(decisions, the_sites, missing_by_site, correlated_by_site)
 
     # ── Write ──────────────────────────────────────────────────────────────
     log.section("06 · Output")
@@ -568,6 +597,13 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
                 parquet = _write_parquet(result, staged / parquet_name)
             if parquet:
                 files["batch table (Parquet)"] = parquet
+        files["vector certificate test lots"] = staged / LV_COA_TEST_LOTS
+        with _preparing(
+            f"the vector certificate test lots ({len(test_lots):,} lots, Excel)",
+            files["vector certificate test lots"],
+            folder,
+        ):
+            test_lots.to_excel(files["vector certificate test lots"], index=False)
 
         prov = _provenance(config, sources)
         build_run = report.BuildRun(
@@ -673,6 +709,11 @@ def run_build(config: dict[str, Any], config_path: str | Path | None = None) -> 
                     str(c) for c in result.columns if c not in set(catalog_cols)
                 ],
                 duplicate_batches=merge_report.duplicate_batches,
+                sites=list(the_sites),
+                lv_coa_test_lots={
+                    "path": LV_COA_TEST_LOTS,
+                    "lots": [str(lot) for lot in test_lots[names.col("vector_lot")]],
+                },
             )
         )
         uploaded = share.upload(files, folder)
@@ -867,7 +908,7 @@ def _register(config: dict[str, Any]) -> screening.Register | None:
 
 
 def _read_register(
-    site: str, columns: list[str], config: dict[str, Any]
+    sites: tuple[str, ...], columns: list[str], config: dict[str, Any]
 ) -> tuple[screening.Register | None, str]:
     """The register as this build reads it, and a line for the reports that says which
     register they show (or why none).
@@ -883,7 +924,8 @@ def _read_register(
     except Exception as exc:  # the reports are still worth having without it
         log.warn(MODULE, f"The screening register could not be read, so no report shows it: {exc}")
         return None, f"The screening register could not be read: {exc}"
-    here = screening.for_site(register.decisions, site)
+    site = " and ".join(sites)
+    here = [d for d in register.decisions if d.site in (*sites, screening.ALL)]
     unknown = sorted({d.parameter for d in here} - set(columns))
     if unknown:
         log.warn(
@@ -892,7 +934,7 @@ def _read_register(
             "not columns of this batch table, so they match nothing",
             ", ".join(unknown[:10]),
         )
-    out = screening.standing(here, (site,))
+    out = screening.standing(here, sites)
     counts = {
         track: sum(d.track == track for found in out.values() for d in found)
         for track in screening.TRACKS
@@ -912,16 +954,15 @@ def _read_register(
 
 def _show_register(
     decisions: list[screening.Decision],
-    site: str,
+    sites: tuple[str, ...],
     missing_by_site: dict[str, tuple],
     correlated_by_site: dict[str, tuple],
 ) -> None:
-    """Mark every parameter with what the register holds on it at ``site``, in both reports.
+    """Mark every parameter with what the register holds on it at ``sites``, in both reports.
 
     Each report lists its own decisions (``screened``: what it can reinstate) and the
     other report's (``elsewhere``), and the conflicts.
     """
-    sites = (site,)
     out = screening.standing(decisions, sites)
     stands_for = screening.represented(decisions, sites)
     found = screening.conflicts(decisions, sites)
@@ -2090,7 +2131,13 @@ def _parser() -> argparse.ArgumentParser:
     leaks_cmd.add_argument(
         "folder", nargs="?", default=".", help="the repository to search (default: here)"
     )
-    commands.add_parser("build", help="build the batch table of config.yaml's site")
+    build = commands.add_parser("build", help="build the batch table of config.yaml's site")
+    build.add_argument(
+        "--all-sites",
+        action="store_true",
+        help="build one batch table (and its vector certificate test lots) of every site, "
+        "into an 'All sites' folder beside the sites' own",
+    )
     update = commands.add_parser("update", help="check-catalog, build, then the given tasks")
     update.add_argument("--task", action="append", help="a task workspace (repeatable)")
 
@@ -2295,7 +2342,7 @@ def _run(args) -> int:
     if command in ("check-catalog", "update"):
         run_catalog(config)
     if command in ("build", "update"):
-        run_build(config)
+        run_build(config, all_sites=getattr(args, "all_sites", False))
     if command == "update" and args.task:
         for spec in load_tasks(args, config):
             run_task(config, spec)
