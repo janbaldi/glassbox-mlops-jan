@@ -230,10 +230,10 @@ def validate(config: dict[str, Any], source: str = "config") -> None:
         if isinstance(holder, dict) and name in holder:
             errors.append(f"{key}: no longer a setting — {why}")
 
-    if config.get("site") not in SITE_KEYS:
+    if config.get("site") not in (*SITE_KEYS, names.ALL_SITES):
         errors.append(
             f"site: required — the site everything is about, {' or '.join(SITE_KEYS)} "
-            "(the vocabulary names them)"
+            f"(the vocabulary names them), or {names.ALL_SITES} for every site at once"
         )
 
     allowed = ("databricks", "location", "fallback_to_local")
@@ -322,11 +322,23 @@ def site_key(config: dict[str, Any]) -> str:
 
 
 def site_name(config: dict[str, Any]) -> str:
-    """The name of the site everything is about, as the vocabulary has it."""
+    """The name of the site everything is about, as the vocabulary has it (``All sites`` for
+    ``site: all``)."""
     return names.site(site_key(config))
 
 
-def location(config: dict[str, Any], label: str, sited: bool = True) -> share.Location:
+def site_keys(config: dict[str, Any]) -> tuple[str, ...]:
+    """The keys of the sites the config is about: its own, or every site for ``all``."""
+    key = site_key(config)
+    return SITE_KEYS if key == names.ALL_SITES else (key,)
+
+
+def site_names(config: dict[str, Any]) -> tuple[str, ...]:
+    """The names of the sites the config is about."""
+    return names.sites_of(site_name(config))
+
+
+def location(config: dict[str, Any], label: str) -> share.Location:
     """Where ``label`` is on SharePoint, with the sheet its data is on (or a CSV's delimiter).
 
     The batch table is the site's own: ``<its folder>/<site name>/<its name>``, so
@@ -341,29 +353,21 @@ def location(config: dict[str, Any], label: str, sited: bool = True) -> share.Lo
     sheet = entry.get("sheet", names.sheet(label, 0))
     sep = entry.get("sep")
     found = share.Location(str(entry["drive_id"]), str(entry["path"]), sheet, sep)
-    if label == "batch_table" and sited:
+    if label == "batch_table":
         return _in_site_folder(found, config)
     return found
 
 
-def _in_site_folder(
-    file: share.Location, config: dict[str, Any], name: str | None = None
-) -> share.Location:
-    """The same file name, in a folder named after the site (or ``name``), inside the file's
-    own folder."""
+def _in_site_folder(file: share.Location, config: dict[str, Any]) -> share.Location:
+    """The same file name, in a folder named after the site, inside the file's own folder."""
     folder = file.folder.path
-    name = name or site_name(config)
-    return replace(file, path=f"{folder}{name}/{file.path[len(folder) :]}")
-
-
-#: The folder, next to the sites' own, that ``ml build --all-sites`` writes into.
-ALL_SITES_FOLDER = "All sites"
+    return replace(file, path=f"{folder}{site_name(config)}/{file.path[len(folder) :]}")
 
 
 def all_sites_batch_table(config: dict[str, Any]) -> share.Location:
-    """Where ``ml build --all-sites`` writes the batch table of every site together: the
-    same file name, in an ``All sites`` folder beside the sites' own."""
-    return _in_site_folder(location(config, "batch_table", sited=False), config, ALL_SITES_FOLDER)
+    """Where ``ml build --all-sites`` (or ``site: all``) writes the batch table of every
+    site together: the same file name, in an ``All sites`` folder beside the sites' own."""
+    return location(for_site(config, names.ALL_SITES), "batch_table")
 
 
 def for_site(config: dict[str, Any], key: str) -> dict[str, Any]:

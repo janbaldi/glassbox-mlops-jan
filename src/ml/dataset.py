@@ -605,16 +605,19 @@ def task_site(spec: TaskSpec, configured: str | None, where: str = "config.yaml"
     return spec.site
 
 
-def check_batch_table_site(batch_table: pd.DataFrame, site: str) -> None:
-    """Refuse a batch table that is not the site's own: every batch must be from ``site``.
-    An empty ``site`` (the rerun of a run from before) takes the table as it was."""
-    if not site:
+def check_batch_table_site(batch_table: pd.DataFrame, sites: tuple[str, ...]) -> None:
+    """Refuse a batch table that is not the task's: every batch must be from ``sites`` (one
+    site, or every site for ``site: all``), and for one site, from it. No ``sites`` (the
+    rerun of a run from before) takes the table as it was."""
+    if not sites:
         return
     found = sorted(map(str, batch_table["Site Merged"].dropna().unique()))
-    if found != [site]:
+    wrong = not found or not set(found) <= set(sites) or (len(sites) == 1 and found != list(sites))
+    if wrong:
+        about = " and ".join(sites)
         raise TaskRefused(
             f"The batch table holds batches from {', '.join(found) or 'no site'}, and this task "
-            f"is about {site} only: rebuild it with `ml build` and site: set to {site}'s key"
+            f"is about {about} only: rebuild it with `ml build` and site: set to the task's site"
         )
 
 

@@ -12,8 +12,9 @@
 # The config.yaml that says where on SharePoint the batch table and catalog are.
 __CONFIG__
 
-# The site the task is about (a or b, as config.yaml's site: names it). Its runs
-# read that site's batch table, and refuse to run with a config about another site.
+# The site the task is about (a or b, as config.yaml's site: names it; all for every
+# site). Its runs read that site's batch table, and refuse to run with a config about
+# another site. With all, a parameter the screening register excludes at any site is out.
 site: __SITE__
 
 task:

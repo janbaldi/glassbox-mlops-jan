@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 
 import pandas as pd
+import pytest
 import yaml
 
 import dummy_data
@@ -462,3 +463,37 @@ def test_a_task_can_compare_two_periods_of_batches(built, tmp_path):
     batches = pd.read_csv(folder / cli.TASK_LAYOUT.get("batches.csv", "batches.csv"))
     reasons = set(batches.loc[~batches["Included"], "Reason"])
     assert f"{made} is outside both periods" in reasons
+
+
+# ---------------------------------------------------------------------------
+# A task over every site
+# ---------------------------------------------------------------------------
+def test_a_task_about_every_site_reads_the_all_sites_batch_table(built, tmp_path):
+    """``site: all`` reads the batch table of `ml build --all-sites`, and leaves out a
+    parameter the register excludes at any site: the union."""
+    from ml import cli, names, taskconfig
+
+    config = {**built["config"], "site": names.ALL_SITES}
+    screened = dummy_data.screened_parameter()  # excluded at site A only
+
+    listed, _, _ = cli._screened_for_new_task(config)
+    assert screened in {parameter for parameter, _ in listed}
+
+    task = yaml.safe_load((built["directory"] / dummy_data.TASK_FILES[0] / "task.yaml").read_text())
+    task["config"] = str(built["config_path"])
+    task["site"] = names.ALL_SITES
+    task["task"]["name"] = "every site"
+    task["predictors"]["exclude"] = []
+    (tmp_path / "task.yaml").write_text(yaml.safe_dump(task, sort_keys=False), encoding="utf-8")
+    folder = cli.run_task(config, taskconfig.load(tmp_path))
+
+    batches = pd.read_csv(folder / cli.TASK_LAYOUT.get("batches.csv", "batches.csv"))
+    assert len(batches) == len(built["batch_table_all"])
+    table = pd.read_csv(folder / cli.TASK_LAYOUT.get("dataset.csv", "dataset.csv"))
+    assert screened not in table.columns
+
+    # A one-site task refuses the batch table of every site.
+    task["site"] = "a"
+    (tmp_path / "task.yaml").write_text(yaml.safe_dump(task, sort_keys=False), encoding="utf-8")
+    with pytest.raises(Exception, match="about site a"):
+        cli.run_task(config, taskconfig.load(tmp_path))

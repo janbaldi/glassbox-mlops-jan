@@ -27,6 +27,7 @@ from typing import Any
 
 import yaml
 
+from . import names
 from .encode import TaskParams
 
 #: Filter operators a cohort may use. No expressions, no eval: a fixed set.
@@ -636,8 +637,11 @@ def parse(
             "(a or b) under site: at the top, as config.yaml's site: does"
         )
     site = str(raw.get("site") or "").strip()
-    if site and site not in SITE_KEYS:
-        errors.append(f"site: '{site}' is not a site key ({' or '.join(SITE_KEYS)})")
+    if site and site not in (*SITE_KEYS, names.ALL_SITES):
+        errors.append(
+            f"site: '{site}' is not a site key ({' or '.join(SITE_KEYS)}, or "
+            f"{names.ALL_SITES} for every site)"
+        )
     cohort = Cohort(
         sites=_names(cohort_raw, "sites", "cohort", errors) if frozen else (),
         filters=_filters(cohort_raw, "cohort", errors),

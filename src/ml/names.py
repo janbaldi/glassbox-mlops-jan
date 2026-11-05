@@ -489,13 +489,26 @@ def values(key: str) -> tuple[str, ...]:
     return found if isinstance(found, tuple) else (found,)
 
 
+#: The site key of every site at once (config.yaml's and task.yaml's ``site: all``), and
+#: what it is called: one batch table, and the tasks on it, over every site's batches.
+ALL_SITES = "all"
+ALL_SITES_NAME = "All sites"
+
+
 def site(which: str) -> str:
-    """The name of site ``a`` or site ``b``."""
+    """The name of site ``a`` or site ``b`` (or of ``all`` of them)."""
+    if which == ALL_SITES:
+        return ALL_SITES_NAME
     return _get("site", which)
 
 
 def sites() -> tuple[str, str]:
     return site("a"), site("b")
+
+
+def sites_of(name: str) -> tuple[str, ...]:
+    """The sites a site name stands for: itself, or every site for :data:`ALL_SITES_NAME`."""
+    return sites() if name == ALL_SITES_NAME else (name,)
 
 
 def sheet(label: str, default: Any = 0) -> Any:

@@ -25,6 +25,7 @@ and names that config's site:
 
 ```yaml
 site: a          # the site the task is about: its batch table and screening decisions
+                 # (all: the batch table of every site, and what any site excludes)
 ```
 
 A run reads that site's batch table, and refuses to run with a config about the

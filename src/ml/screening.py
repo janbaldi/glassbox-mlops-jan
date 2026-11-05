@@ -276,6 +276,13 @@ def _sites(decision: Decision, sites: tuple[str, ...]) -> tuple[str, ...]:
     return sites if decision.site == ALL else (decision.site,)
 
 
+def for_sites(decisions: list[Decision], sites: tuple[str, ...]) -> list[Decision]:
+    """The decisions about any of ``sites`` (or ``all``), in the register's order. Over
+    several sites, :func:`excluded` leaves a parameter out when any of them excludes it:
+    the union."""
+    return [d for d in decisions if d.site in (*sites, ALL)]
+
+
 def for_site(decisions: list[Decision], site: str) -> list[Decision]:
     """The decisions about one site: made at it, or at ``all``. Everything is about one site
     at a time (``site:`` in config.yaml), so that is all a build, a report or a task sees."""

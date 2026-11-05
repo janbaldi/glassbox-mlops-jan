@@ -865,13 +865,15 @@ def test_a_task_names_its_site_and_refuses_another(tmp_path, caplog):
 
 def test_a_task_refuses_a_batch_table_of_another_site_or_of_both():
     table = pd.DataFrame({"Site Merged": [names.site("a"), names.site("a")]})
-    dataset.check_batch_table_site(table, names.site("a"))
+    dataset.check_batch_table_site(table, (names.site("a"),))
+    both = pd.DataFrame({"Site Merged": [names.site("a"), names.site("b")]})
     for other in (names.site("b"), names.site("a")):
-        both = pd.DataFrame({"Site Merged": [names.site("a"), names.site("b")]})
         with pytest.raises(dataset.TaskRefused, match="rebuild it with `ml build`"):
-            dataset.check_batch_table_site(both, other)
+            dataset.check_batch_table_site(both, (other,))
     with pytest.raises(dataset.TaskRefused, match=f"is about {names.site('b')} only"):
-        dataset.check_batch_table_site(table, names.site("b"))
+        dataset.check_batch_table_site(table, (names.site("b"),))
+    # A task about every site takes the batch table of every site.
+    dataset.check_batch_table_site(both, names.sites_of(names.site(names.ALL_SITES)))
 
 
 def test_a_proposal_is_about_the_configured_site(built, tmp_path):

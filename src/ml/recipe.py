@@ -170,8 +170,8 @@ def task_screening(spec: taskconfig.TaskSpec, config: dict | None = None) -> dic
         about = dataset.task_site(spec, configured)
         decisions = register.decisions if register else []
         if about:
-            site = names.site(about)
-            out = screening.excluded(screening.for_site(decisions, site), (site,))
+            sites = names.sites_of(names.site(about))
+            out = screening.excluded(screening.for_sites(decisions, sites), sites)
         else:  # a run from before tasks were about one site, as it applied the register
             out = screening.excluded(decisions, names.sites(), spec.cohort.sites)
         _screenings[key] = {parameter: screening.labels(found) for parameter, found in out.items()}
@@ -195,7 +195,9 @@ def task_data(
     batch_table = io.load_batch_table(
         workspace.table_source(config, "batch_table", spec.batch_table)
     )
-    dataset.check_batch_table_site(batch_table, names.site(spec.site) if spec.site else "")
+    dataset.check_batch_table_site(
+        batch_table, names.sites_of(names.site(spec.site)) if spec.site else ()
+    )
     result = TaskResult(spec=spec)
     cohort = dataset.select_cohort(batch_table, spec, result)
     target, labelled = dataset.prepare_target(cohort, spec, result)

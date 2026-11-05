@@ -27,7 +27,9 @@ seed: 20260917
 # `ml check-catalog` read only this site's sources and write into a folder named
 # after it, next to sharepoint.batch_table and sharepoint.catalog; every task
 # reads that site's batch table and screening decisions. Switch it to work on the
-# other site: each site's outputs stay in their own folder.
+# other site: each site's outputs stay in their own folder. `all` is every site at
+# once: one batch table in an 'All sites' folder, and tasks on it leave out what the
+# screening register excludes at any site.
 site: a
 
 sources:

@@ -56,6 +56,12 @@ decisions at that site (or `all`). To work on the other site, switch `site:`
 (or keep a second config that differs only in it): each site's outputs stay
 apart, and a task about one site refuses to run with a config about the other.
 
+**`site: all`** is every site at once. `ml check-catalog` checks each site in
+turn, into each site's own folder; `ml build` (the same as `ml build --all-sites`)
+writes one batch table of every site's batches into `<batch table folder>/All
+sites/`; and a task with `site: all` reads that batch table. Screening is the
+union: a parameter the register excludes at any site (or at `all`) is left out.
+
 The catalog, the vocabulary and the screening register are shared by both
 sites. The rest of `config.yaml` holds the settings of the build (cleaning
 rules, feature thresholds, which batches the missingness, correlation and

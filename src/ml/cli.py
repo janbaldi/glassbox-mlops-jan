@@ -204,6 +204,13 @@ def run_catalog(config: dict[str, Any], config_path: str | Path | None = None) -
     the manifest and the new-parameters list into the site's folder next to the
     catalog. Returns where the report went.
     """
+    if workspace.site_key(config) == names.ALL_SITES:
+        # Every site's sources against the catalog, each into its own folder, as a build of
+        # all of them checks.
+        reports = [
+            run_catalog(workspace.for_site(config, key), config_path) for key in workspace.SITE_KEYS
+        ]
+        return reports[-1]
     run_start = datetime.now()
     mark = log.mark()
     key = workspace.site_key(config)
@@ -370,7 +377,10 @@ def run_build(
     """
     run_start = datetime.now()
     mark = log.mark()
-    keys = workspace.SITE_KEYS if all_sites else (workspace.site_key(config),)
+    if all_sites:
+        config = workspace.for_site(config, names.ALL_SITES)
+    keys = workspace.site_keys(config)
+    all_sites = len(keys) > 1
     inputs = tuple(dict.fromkeys(label for key in keys for label in _build_inputs(key)))
     workspace.require(config, ("vocabulary", *inputs, "batch_table"))
     params = features.Params(**(config.get("features") or {}))
@@ -385,11 +395,7 @@ def run_build(
 
     src = {label: workspace.source(config, label) for label in inputs}
     site_maps = workspace.site_map_sources(config) if "b" in keys else []
-    target_table = (
-        workspace.all_sites_batch_table(config)
-        if all_sites
-        else workspace.location(config, "batch_table")
-    )
+    target_table = workspace.location(config, "batch_table")
     folder = target_table.folder
     write_parquet = (config.get("build") or {}).get("write_parquet", True)
     date_column = (config.get("build") or {}).get("date_column", DATE_COLUMN)
@@ -1041,15 +1047,16 @@ def run_screening_add(
     evidence, digest = _latest_evidence(config)
     frame = io.read_table(proposal)
     site = workspace.site_name(config)
+    here = workspace.site_names(config)
     if "Site" in frame.columns:
         elsewhere = sorted(
-            {str(v).strip() for v in frame["Site"].dropna()} - {site, screening.ALL, ""}
+            {str(v).strip() for v in frame["Site"].dropna()} - {*here, screening.ALL, ""}
         )
         if elsewhere:
             raise screening.ScreeningError(
                 f"The proposal decides at {', '.join(elsewhere)}, and config.yaml is about "
                 f"{site} (site: {workspace.site_key(config)}): its latest build is the evidence "
-                f"checked, so a proposal is about {site} or {screening.ALL} only"
+                f"checked, so a proposal is about {' or '.join(here)} or {screening.ALL} only"
             )
     added = screening.add(register.decisions, frame, evidence, digest, author, sites)
     with tempfile.TemporaryDirectory(prefix="ml-screening-") as staging:
@@ -1077,7 +1084,8 @@ def run_screening_status(config: dict[str, Any]) -> list[dict]:
     workspace.load_vocabulary(config)
     register = screening.read(workspace.location(config, "screening"), names.sites())
     site = workspace.site_name(config)
-    sites, decisions = (site,), screening.for_site(register.decisions, site)
+    sites = workspace.site_names(config)
+    decisions = screening.for_sites(register.decisions, sites)
     standing = screening.summary(decisions, sites)
     log.facts(
         "Screening register",
@@ -1337,15 +1345,16 @@ def _task_site(config: dict[str, Any] | None, spec: TaskSpec) -> str:
 
 
 def _check_batch_table_site(batch_table: pd.DataFrame, site: str) -> None:
-    dataset.check_batch_table_site(batch_table, site)
+    dataset.check_batch_table_site(batch_table, names.sites_of(site) if site else ())
 
 
 def _warn_conflicts(decisions: list[screening.Decision], site: str) -> list[str]:
-    """Warn about every representative at ``site`` that is excluded itself; returns them in
-    words."""
+    """Warn about every representative at ``site`` (each site, for All sites) that is
+    excluded itself; returns them in words."""
+    sites = names.sites_of(site)
     lines = [
         screening.conflict_line(c)
-        for c in screening.conflicts(screening.for_site(decisions, site), (site,))
+        for c in screening.conflicts(screening.for_sites(decisions, sites), sites)
     ]
     for line in lines:
         log.warn(MODULE, f"Screening conflict: {line} — resolve it in the correlation report")
@@ -1386,7 +1395,9 @@ def _screened_for_new_task(
         log.warn(MODULE, f"The screening register could not be read for the task file: {exc}")
         return [], "", []
     site = workspace.site_name(config)
-    excluded = screening.excluded(screening.for_site(register.decisions, site), (site,))
+    sites = names.sites_of(site)
+    # Over every site, a parameter any of them excludes: the union.
+    excluded = screening.excluded(screening.for_sites(register.decisions, sites), sites)
     last = register.decisions[-1].id if register.decisions else ""
     found = _warn_conflicts(register.decisions, site)
     return (
@@ -1546,8 +1557,9 @@ def write_task_catalog(config: dict[str, Any], spec: TaskSpec) -> Path:
     _check_batch_table_site(batch_table, site)
     catalog_frame = io.read_catalog(catalog_source)
     register = _register(config)
-    decisions = screening.for_site(register.decisions, site) if register else []
-    screened = screening.excluded(decisions, (site,))
+    sites = names.sites_of(site)
+    decisions = screening.for_sites(register.decisions, sites) if register else []
+    screened = screening.excluded(decisions, sites)
     usable = dataset.candidate_predictors(
         batch_table,
         catalog_frame,
@@ -1577,10 +1589,11 @@ def _task_register(config: dict[str, Any] | None, spec: TaskSpec) -> screening.R
         log.info(MODULE, "No screening register is configured; no parameter is screened out")
     else:
         site = workspace.site_name(config)
+        sites = names.sites_of(site)
         log.info(
             MODULE,
             f"Applying the screening register at {site}",
-            screening.status_line(screening.for_site(register.decisions, site), (site,)),
+            screening.status_line(screening.for_sites(register.decisions, sites), sites),
         )
     return register
 
@@ -1675,7 +1688,8 @@ def run_task(config: dict[str, Any] | None, spec: TaskSpec) -> Path:
         if register is None:
             screened = {}
         elif site:
-            screened = screening.excluded(screening.for_site(register.decisions, site), (site,))
+            sites = names.sites_of(site)
+            screened = screening.excluded(screening.for_sites(register.decisions, sites), sites)
         else:  # as a run from before tasks were about one site applied it
             screened = screening.excluded(register.decisions, names.sites(), spec.cohort.sites)
         _check_listed_screening(spec, screened)
@@ -1887,10 +1901,11 @@ def validate(config: dict[str, Any] | None, specs: list[TaskSpec]) -> list[str]:
             register = _register(config)
             if register is not None:
                 site = workspace.site_name(config)
+                sites = names.sites_of(site)
                 log.success(
                     MODULE,
                     f"Screening register at {site}",
-                    screening.status_line(screening.for_site(register.decisions, site), (site,)),
+                    screening.status_line(screening.for_sites(register.decisions, sites), sites),
                 )
         except screening.ScreeningError as exc:
             problems.append(str(exc))
