@@ -106,6 +106,24 @@ not have, is said in a comment and warned about when the task is made. Without a
 catalog to read, the task gets the same rules as `exclude_by_catalog` instead. The list is the catalog of the day: a parameter the
 catalog gains later is not on it; make the task again, or add the line.
 
+**What was left out, and why, is logged.** `ml task new` prints a report of every
+parameter the new task leaves out of its dataset, and writes the same report, without
+colour and followed by the command's log, to `task_new.log` in the task folder. It opens
+with the counts (catalog parameters, those in the batch table, those usable as
+predictors), then an overview with one line per group, then each group in full: its
+reason, and its parameters one per line. The groups are the screening register, each
+catalog Variable Role and Functional Type value, the catalog rules that matched nothing,
+the dates, the shifts (with `--exclude-shifting`), and what the task's usable inputs
+leave out besides: the task's roles, features computed from the target, site-relative
+features, and catalog parameters the batch table does not have. A parameter left out for
+several reasons is listed in each of its groups, with the others named beside it:
+
+```text
+[3] Catalog Variable Role: Timestamp (12 parameters)
+    Why: the catalog says this Variable Role cannot explain how a batch turned out, or is known only at or after release
+    - Start date            also: Dates and times
+```
+
 **Date columns are left out by default**, every one the latest build's
 `dates.xlsx` holds at any subsite (manufacturing site, line and shift): a model fitted on a date learns when a batch was made
 ([chapter 2](02-monthly-update.md#5-read-the-dates-report)). The durations derived

@@ -52,6 +52,7 @@ from . import (
     dates,
     decorrelate,
     enrich,
+    exclusions,
     features,
     io,
     manifest,
@@ -122,6 +123,8 @@ BUILD_OUTPUTS = {
 LV_COA_TEST_LOTS = "lv_coa_test_lots.xlsx"
 #: Written next to a new task's task.yaml: the catalog rows it can use as input features.
 TASK_CATALOG = "task_catalog.xlsx"
+#: Written next to a new task's task.yaml: every parameter it leaves out, grouped by why.
+TASK_NEW_LOG = "task_new.log"
 
 
 def _provenance(config: dict[str, Any], sources: list[provenance.Source]) -> dict:
@@ -1539,7 +1542,9 @@ def _dates_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[str, 
     ], built
 
 
-def write_task_catalog(config: dict[str, Any], spec: TaskSpec) -> Path:
+def write_task_catalog(
+    config: dict[str, Any], spec: TaskSpec, result: dataset.TaskResult | None = None
+) -> Path:
     """``task_catalog.xlsx`` next to the task's task.yaml: the catalog rows of the
     parameters this task can use as input features.
 
@@ -1547,6 +1552,8 @@ def write_task_catalog(config: dict[str, Any], spec: TaskSpec) -> Path:
     latest batch table and catalog, with the screening register as it is now at the
     task's sites and the task file's own exclusions and roles. A later edit of
     task.yaml, a new build or a new decision shows after ``ml task catalog``.
+    ``result``, when given, is left holding that choice: what was kept, and what was
+    left out and why.
     """
     workspace.load_vocabulary(config)
     site = names.site(_task_site(config, spec))
@@ -1564,7 +1571,7 @@ def write_task_catalog(config: dict[str, Any], spec: TaskSpec) -> Path:
         batch_table,
         catalog_frame,
         spec,
-        dataset.TaskResult(spec),
+        result if result is not None else dataset.TaskResult(spec),
         screened={p: screening.labels(ds) for p, ds in screened.items()},
     )
     table = screening.task_catalog(catalog_frame, usable, decisions, (site,))
@@ -1576,6 +1583,43 @@ def write_task_catalog(config: dict[str, Any], spec: TaskSpec) -> Path:
         str(path),
     )
     return path
+
+
+def _log_exclusions(
+    path: Path,
+    args,
+    config: dict[str, Any] | None,
+    mark: int,
+    *,
+    result: dataset.TaskResult | None,
+    **found,
+) -> Path:
+    """Print what the new task at ``path`` leaves out of its dataset, grouped by why, and
+    write the same to ``task_new.log`` beside it, with the log of ``ml task new``."""
+    report = exclusions.build(
+        task=path.parent.name,
+        file=str(path),
+        config=str(config["__path__"]) if config else "",
+        site=workspace.site_key(config) if config else "",
+        target=args.target,
+        catalog_rules=dict(scaffold.EXCLUDED_BY_CATALOG),
+        keep_dates=args.keep_dates,
+        exclude_shifting=args.exclude_shifting,
+        result=result,
+        **found,
+    )
+    log.lines(exclusions.render(report, log._paint))
+    target = path.parent / TASK_NEW_LOG
+    text = "\n".join(exclusions.render(report))
+    text += "\n\n" + "-" * 72 + "\nLog of ml task new\n" + "-" * 72 + "\n"
+    text += _log_text(log.since(mark)) + "\n"
+    target.write_text(text, encoding="utf-8")
+    log.success(
+        MODULE,
+        f"Left out: {len(report.excluded()):,} parameters in {len(report.groups)} groups",
+        str(target),
+    )
+    return target
 
 
 def _task_register(config: dict[str, Any] | None, spec: TaskSpec) -> screening.Register | None:
@@ -2239,6 +2283,7 @@ def _run(args) -> int:
     first_task = (getattr(args, "task", None) or [None])[0]
 
     if command == "task new":
+        mark = log.mark()
         found = _config(args, start=args.folder, required=False)
         screened, as_of, conflicts = _screened_for_new_task(found)
         catalog_groups = _catalog_groups_for_new_task(found)
@@ -2261,14 +2306,33 @@ def _run(args) -> int:
             catalog_groups=catalog_groups,
         )
         catalog = None
+        chosen = None
         if found:
             try:
-                catalog = write_task_catalog(found, taskconfig.load(path))
+                spec = taskconfig.load(path)
+                chosen = dataset.TaskResult(spec)
+                catalog = write_task_catalog(found, spec, chosen)
             except Exception as exc:  # the task file stands; the list can be written later
+                chosen = None
                 log.warn(
                     MODULE,
                     f"{TASK_CATALOG} was not written: {exc} — fix it, then `ml task catalog`",
                 )
+        exclusion_log = _log_exclusions(
+            path,
+            args,
+            found,
+            mark,
+            screened=screened,
+            screened_as_of=as_of,
+            conflicts=conflicts,
+            catalog_groups=catalog_groups,
+            dated=dated,
+            dated_built=dated_built,
+            shifting=shifting,
+            shifting_built=built,
+            result=chosen,
+        )
         if not args.target:
             log.warn(
                 MODULE,
@@ -2280,6 +2344,7 @@ def _run(args) -> int:
             [
                 ("File", str(path)),
                 ("Usable inputs", str(catalog) if catalog else "not written (see above)"),
+                ("Left out", str(exclusion_log)),
                 ("Config", found["__path__"] if found else "none found — set config: in the file"),
                 *(
                     []

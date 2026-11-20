@@ -516,6 +516,32 @@ def test_a_new_task_lists_every_parameter_the_catalog_defaults_leave_out(built, 
     assert any(role.get(p) == "Process parameter" for p in usable)
 
 
+def test_a_new_task_logs_what_it_leaves_out_and_why(built, tmp_path, caplog):
+    folder = tmp_path / "logged"
+    args = ["--config", str(built["config_path"]), "task", "new", str(folder)]
+    assert cli.main(args) == 0
+    printed = caplog.text
+    text = (folder / cli.TASK_NEW_LOG).read_text(encoding="utf-8")
+    spec = taskconfig.load(folder / "task.yaml")
+    usable = set(pd.read_excel(folder / "task_catalog.xlsx")["Parameter"])
+    # Screen and file say the same, the file without colour, and with the command's log.
+    for words in ("Parameters left out of the task's dataset", "Catalog Variable Role: Identifier"):
+        assert words in printed and words in text
+    assert "\033[" not in text
+    assert "Log of ml task new" in text
+    # Every parameter the task file leaves out is in the log, and none it can use.
+    listed = {
+        line.strip()[2:].split("  ")[0].strip()
+        for line in text.split("Log of ml task new")[0].splitlines()
+        if line.startswith("    - ")
+    }
+    assert set(dict(spec.predictors.exclude)) <= listed
+    assert not usable & listed
+    # A parameter left out for two reasons names the other group.
+    assert f"{c('date_start')}" in text and "also: Dates and times" in text
+    assert "Why: the catalog says this Variable Role cannot explain" in text
+
+
 def test_a_column_listed_for_several_reasons_keeps_them_all(caplog):
     spec = taskconfig.parse(
         {

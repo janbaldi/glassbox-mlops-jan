@@ -323,6 +323,12 @@ class PipelineLogger:
             if where:
                 self._print(f"  {' ' * width}  {self._paint(where, 'dim')}")
 
+    def lines(self, lines: list[str]):
+        """A block of lines already laid out (and painted with :meth:`_paint`), printed as is."""
+        self._print()
+        for line in lines:
+            self._print(line)
+
     def names(self, title: str, names: list[str], level: str = "WARN"):
         """A heading with its count, then one name per line under it."""
         colour = _LEVELS[level][2] or "green"
