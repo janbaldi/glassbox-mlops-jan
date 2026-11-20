@@ -25,6 +25,14 @@ CATALOG_WHY = (
     "at or after release"
 )
 SCREENED_WHY = "screened out by a decision in the screening register at this site"
+#: The catalog columns the screening groups are divided by, under each reason, in order.
+SCREENING_METADATA = ("Variable Role", "Functional Type")
+#: One screening decision as a task names it (:attr:`ml.screening.Decision.label`):
+#: ``S-0003: retired (Ghent)``, perhaps with ``, represented by 'X'``.
+_DECISION = re.compile(
+    r"(?P<id>[^\s;:]+): (?P<reason>[^;()]+?) \((?P<site>[^()]*)\)"
+    r"(?:, represented by '(?P<represented>[^']*)')?"
+)
 DATES_WHY = (
     "a model fitted on a date learns when a batch was made; the durations derived from the "
     "dates stay usable"
@@ -74,6 +82,9 @@ class Group:
     rows: list[tuple[str, str]] = field(default_factory=list)
     #: Lines said about the group as a whole (a rule that matched nothing, a conflict).
     notes: list[str] = field(default_factory=list)
+    #: (heading, its parameters) when the rows are shown divided, as the screening groups
+    #: are by catalog metadata; empty to show them in one list.
+    sections: list[tuple[str, list[str]]] = field(default_factory=list)
 
 
 @dataclass
@@ -96,6 +107,8 @@ class Report:
     made: datetime = field(default_factory=datetime.now)
     #: The command that wrote it.
     command: str = "ml task new"
+    #: Parameter → its catalog metadata in words, which divides the screening groups.
+    metadata: dict[str, str] = field(default_factory=dict)
 
     def excluded(self) -> list[str]:
         """Every parameter some group leaves out, once each, in the order first met."""
@@ -121,25 +134,31 @@ def build(
     shifting_built: str = "",
     exclude_shifting: bool = False,
     result=None,
+    catalog=None,
 ) -> Report:
     """The report of a new task.
 
     The first groups are those the task file lists (``predictors.exclude``); ``result``
     is the :class:`ml.dataset.TaskResult` that worked out the task's usable inputs, and
     adds what a run leaves out besides, and what the batch table does not have.
+    ``catalog`` (the catalog as read) divides the screening groups by its metadata.
     """
     report = Report(task=task, file=file, config=config, site=site, target=target)
     groups = report.groups
+    report.metadata = metadata_of(catalog)
 
-    # ── The screening register ─────────────────────────────────────────────
-    group = Group(
-        "Screening register",
-        SCREENED_WHY + (f" (last decision {screened_as_of})" if screened_as_of else ""),
-        [(p, why) for p, why in screened],
-    )
-    group.notes += [f"CONFLICT: {line}" for line in conflicts]
-    if group.rows or group.notes:
-        groups.append(group)
+    # ── The screening register, a group per reason ─────────────────────────
+    as_of = f" (last decision {screened_as_of})" if screened_as_of else ""
+    groups += screening_groups(screened, report.metadata, why=SCREENED_WHY + as_of)
+    if conflicts:
+        groups.append(
+            Group(
+                "Screening register conflicts",
+                "a representative the register excludes too, so its group is left out whole: "
+                "pick another representative in the correlation report",
+                notes=list(conflicts),
+            )
+        )
 
     # ── The catalog's Variable Role and Functional Type ────────────────────
     if catalog_groups is None:
@@ -195,39 +214,77 @@ def build(
 
     return _add_run_groups(report, result)
 
-    listed = set(report.excluded())
-    by_stage: dict[str, list[tuple[str, str]]] = {}
-    for decision in result.decisions:
-        if decision.decision != "excluded":
-            continue
-        stage = decision.stage
-        if stage in ("task exclusion", "screening"):
-            if decision.parameter in listed:
-                continue  # one of the groups above
-            stage = "other"
-        by_stage.setdefault(stage, []).append((decision.parameter, decision.reason))
-    for stage, (title, why) in STAGES.items():
-        if by_stage.get(stage):
-            groups.append(Group(title, why, by_stage.pop(stage)))
-    for stage, rows in by_stage.items():  # anything not foreseen still shows
-        title = "Other exclusions" if stage == "other" else f"Excluded at '{stage}'"
-        groups.append(Group(title, "left out when the usable inputs were worked out", rows))
 
-    if result.missing_from_batch_table:
-        groups.append(
-            Group(
-                "In the catalog, not in the batch table",
-                "the site's batch table has no such column, so there is nothing to use",
-                [(p, "") for p in result.missing_from_batch_table],
+def metadata_of(catalog, columns: tuple[str, ...] = SCREENING_METADATA) -> dict[str, str]:
+    """Parameter → its catalog metadata in words: ``Variable Role: Process parameter ·
+    Functional Type: Process``, over the ``columns`` the catalog has. Empty without a
+    catalog, or when it has none of them."""
+    if catalog is None:
+        return {}
+    present = [c for c in columns if c in catalog.columns]
+    if not present:
+        return {}
+    out: dict[str, str] = {}
+    for _, row in catalog.iterrows():
+        words = []
+        for column in present:
+            value = row[column]
+            value = "" if value is None or value != value else str(value).strip()
+            words.append(f"{column}: {value or '(empty)'}")
+        out.setdefault(str(row["Parameter"]), " · ".join(words))
+    return out
+
+
+def screening_groups(
+    rows: list[tuple[str, str]],
+    metadata: dict[str, str],
+    title: str = "Screening register",
+    why: str = SCREENED_WHY,
+) -> list[Group]:
+    """The screened-out parameters as one group per screening reason, each divided by the
+    parameters' catalog metadata.
+
+    ``rows`` is (parameter, ``screened out by S-0001: retired (North); …``): a parameter
+    several decisions leave out is under each of their reasons, with the decisions of that
+    reason beside it. ``metadata`` is :func:`metadata_of`'s; without it the groups are not
+    divided.
+    """
+    by_reason: dict[str, dict[str, list[str]]] = {}
+    for parameter, text in rows:
+        found = list(_DECISION.finditer(text))
+        if not found:
+            by_reason.setdefault("unrecognised reason", {}).setdefault(parameter, []).append(
+                text.removeprefix("screened out by ").strip()
             )
+        for match in found:
+            label = f"{match['id']}, {match['site']}"
+            if match["represented"]:
+                label += f", represented by '{match['represented']}'"
+            decisions = by_reason.setdefault(match["reason"].strip(), {})
+            decisions.setdefault(parameter, []).append(label)
+    out: list[Group] = []
+    for reason in sorted(by_reason, key=_reason_order):
+        members = by_reason[reason]
+        group = Group(
+            f"{title}: {reason}",
+            why,
+            [(p, "; ".join(labels)) for p, labels in members.items()],
         )
-    available = len(result.candidates) + sum(
-        1 for d in result.decisions if d.decision == "excluded"
-    )
-    report.in_batch_table = available
-    report.catalog_parameters = available + len(result.missing_from_batch_table)
-    report.usable = len(result.candidates)
-    return report
+        if metadata:
+            sections: dict[str, list[str]] = {}
+            for parameter in members:
+                heading = metadata.get(parameter, "not in the catalog")
+                sections.setdefault(heading, []).append(parameter)
+            group.sections = sorted(sections.items(), key=lambda s: (-len(s[1]), s[0]))
+        out.append(group)
+    return out
+
+
+def _reason_order(reason: str) -> tuple[int, str]:
+    """The register's own order of reasons, then any other alphabetically."""
+    from .screening import REASONS
+
+    return (REASONS.index(reason), "") if reason in REASONS else (len(REASONS), reason)
 
 
 def render(report: Report, paint: Callable[..., str] = lambda text, *styles: text) -> list[str]:
@@ -286,15 +343,24 @@ def render(report: Report, paint: Callable[..., str] = lambda text, *styles: tex
         for note in group.notes:
             out.append(f"    {paint('-', 'yellow')} {note}")
         width = max((len(p) for p, _ in group.rows), default=0)
-        for parameter, detail in group.rows:
+        details = dict(group.rows)
+
+        def row(parameter: str, indent: str) -> str:
             others = [t for t in seen_in[parameter] if t != group.title]
-            words = [detail] if detail else []
+            words = [details[parameter]] if details[parameter] else []
             if others:
                 words.append("also: " + ", ".join(others))
-            line = f"    - {parameter:<{width}}"
+            line = f"{indent}- {parameter:<{width}}"
             if words:
                 line += "  " + paint(" | ".join(words), "dim")
-            out.append(line.rstrip())
+            return line.rstrip()
+
+        if group.sections:
+            for heading, members in group.sections:
+                out.append(f"    {paint(heading, 'bold')} ({len(members):,})")
+                out += [row(p, "      ") for p in members]
+        else:
+            out += [row(p, "    ") for p, _ in group.rows]
     if not report.groups:
         out.append("")
         out.append("  Nothing is left out.")
@@ -310,6 +376,7 @@ def from_task_file(
     target: str,
     excludes: list[tuple[str, str]],
     result=None,
+    catalog=None,
 ) -> Report:
     """The report of an existing task, from its task file as it stands now.
 
@@ -319,16 +386,19 @@ def from_task_file(
     a reason written by hand goes under "Task file exclusions".
     """
     report = Report(task=task, file=file, config=config, site=site, target=target)
+    report.metadata = metadata_of(catalog)
     groups: dict[str, Group] = {}
-    catalog = re.compile(r"^catalog (?P<column>.+?) is '(?P<value>.*)'$")
+    screened: list[tuple[str, str]] = []
+    by_catalog = re.compile(r"^catalog (?P<column>.+?) is '(?P<value>.*)'$")
     for column, reason in excludes:
-        match = catalog.match(reason)
+        match = by_catalog.match(reason)
         if match:
             title = f"Catalog {match['column']}: {match['value']}"
             why = CATALOG_WHY.format(column=match["column"])
             detail = ""
         elif reason.startswith("screened out by"):
-            title, why, detail = "Screening register", SCREENED_WHY, reason
+            screened.append((column, reason))
+            continue
         elif reason.startswith("a date"):
             title, why, detail = "Dates and times", DATES_WHY, reason
         elif reason.startswith("runs in groups over time"):
@@ -340,10 +410,11 @@ def from_task_file(
         group = groups.setdefault(title, Group(title, why))
         if all(p != column for p, _ in group.rows):
             group.rows.append((column, detail))
-    order = ["Screening register"]
-    order += [t for t in groups if t.startswith("Catalog ")]
+    order = [t for t in groups if t.startswith("Catalog ")]
     order += ["Dates and times", "Run in groups over time", "Task file exclusions"]
-    report.groups = [groups[t] for t in order if t in groups]
+    report.groups = screening_groups(screened, report.metadata) + [
+        groups[t] for t in order if t in groups
+    ]
     return _add_run_groups(report, result)
 
 
@@ -370,7 +441,11 @@ def _add_run_groups(report: Report, result) -> Report:
             stage = "other"
         by_stage.setdefault(stage, []).append((decision.parameter, decision.reason))
     for stage, (title, why) in STAGES.items():
-        if by_stage.get(stage):
+        if not by_stage.get(stage):
+            continue
+        if stage == "screening":
+            groups += screening_groups(by_stage.pop(stage), report.metadata, title, why)
+        else:
             groups.append(Group(title, why, by_stage.pop(stage)))
     for stage, rows in by_stage.items():  # anything not foreseen still shows
         title = "Other exclusions" if stage == "other" else f"Excluded at '{stage}'"

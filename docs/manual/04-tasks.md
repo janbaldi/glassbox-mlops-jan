@@ -124,6 +124,20 @@ several reasons is listed in each of its groups, with the others named beside it
     - Start date            also: Dates and times
 ```
 
+The screening register gets a group per reason (`retired`, `too sparse`,
+`correlated with group`, …), in the register's order. Within each group, the parameters
+are divided by their catalog metadata, **Variable Role** and **Functional Type**, and
+each one names the decisions that leave it out:
+
+```text
+[1] Screening register: irregular (1 parameter)
+    Why: screened out by a decision in the screening register at this site (last decision S-0001)
+    Variable Role: Process parameter · Functional Type: Process (1)
+      - Day 1 mixing cycles  S-0001, Northfield
+```
+
+A parameter left out by decisions with different reasons is listed under each reason.
+
 After you edit `task.yaml`, `ml task catalog` writes `task_catalog.xlsx` and the log
 again, from the task file as it stands: a deleted line is gone from it, and a line you
 added by hand is under **Task file exclusions**, with the reason you gave. Screening

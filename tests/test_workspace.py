@@ -524,8 +524,8 @@ def _left_out(text: str) -> dict[str, list[str]]:
         if line.startswith("["):
             title = line.split("] ", 1)[1].rsplit(" (", 1)[0]
             groups[title] = []
-        elif line.startswith("    - ") and title:
-            groups[title].append(line[6:].split("  ")[0].strip())
+        elif line.lstrip().startswith("- ") and line.startswith("    ") and title:
+            groups[title].append(line.lstrip()[2:].split("  ")[0].strip())
     return groups
 
 
@@ -550,6 +550,10 @@ def test_a_new_task_logs_what_it_leaves_out_and_why(built, tmp_path, caplog):
     # A parameter left out for two reasons names the other group.
     assert f"{c('date_start')}" in text and "also: Dates and times" in text
     assert "Why: the catalog says this Variable Role cannot explain" in text
+    # Screened out: a group per reason, divided by the parameter's catalog metadata.
+    screened = [t for t in made if t.startswith("Screening register: ")]
+    assert screened and all(made[t] for t in screened)
+    assert "    Variable Role: " in text and " · Functional Type: " in text
 
     # `ml task catalog` on the untouched task file: the same groups, the same parameters.
     catalog_args = ["--config", str(built["config_path"]), "task", "catalog", str(folder)]
@@ -579,6 +583,47 @@ def test_a_new_task_logs_what_it_leaves_out_and_why(built, tmp_path, caplog):
     assert "measured with the old method" in (folder / cli.EXCLUSION_LOG).read_text(
         encoding="utf-8"
     )
+
+
+def test_screened_parameters_are_grouped_by_reason_then_by_catalog_metadata():
+    from ml import exclusions
+
+    catalog = pd.DataFrame(
+        {
+            "Parameter": ["a", "b", "c", "d"],
+            "Variable Role": ["Process parameter", "Derived feature", "Process parameter", None],
+            "Functional Type": ["Process"] * 4,
+        }
+    )
+    rows = [
+        ("a", "screened out by S-0001: retired (North)"),
+        ("b", "screened out by S-0002: too sparse (all); S-0003: retired (South)"),
+        ("c", "screened out by S-0004: correlated with group (North), represented by 'x (1)'"),
+        ("d", "screened out by S-0005: retired (North)"),
+        ("e", "screened out by S-0006: retired (North)"),
+    ]
+    groups = exclusions.screening_groups(rows, exclusions.metadata_of(catalog))
+    # The register's order of reasons; a parameter under each of its reasons.
+    assert [g.title for g in groups] == [
+        "Screening register: retired",
+        "Screening register: too sparse",
+        "Screening register: correlated with group",
+    ]
+    retired = groups[0]
+    assert [p for p, _ in retired.rows] == ["a", "b", "d", "e"]
+    assert dict(retired.rows)["b"] == "S-0003, South"
+    assert dict(retired.sections) == {
+        "Variable Role: Process parameter · Functional Type: Process": ["a"],
+        "Variable Role: Derived feature · Functional Type: Process": ["b"],
+        "Variable Role: (empty) · Functional Type: Process": ["d"],
+        "not in the catalog": ["e"],
+    }
+    assert dict(groups[2].rows)["c"] == "S-0004, North, represented by 'x (1)'"
+    lines = "\n".join(exclusions.render(exclusions.Report("t", "f", "", "", "", groups)))
+    assert "    Variable Role: Derived feature · Functional Type: Process (1)\n      - b" in lines
+    assert "also: Screening register: too sparse" in lines
+    # Without a catalog, one plain list per reason.
+    assert not exclusions.screening_groups(rows, {})[0].sections
 
 
 def test_a_column_listed_for_several_reasons_keeps_them_all(caplog):

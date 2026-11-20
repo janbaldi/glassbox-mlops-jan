@@ -1545,7 +1545,7 @@ def _dates_for_new_task(config: dict[str, Any] | None) -> tuple[list[tuple[str, 
 
 def write_task_catalog(
     config: dict[str, Any], spec: TaskSpec, result: dataset.TaskResult | None = None
-) -> Path:
+) -> tuple[Path, pd.DataFrame]:
     """``task_catalog.xlsx`` next to the task's task.yaml: the catalog rows of the
     parameters this task can use as input features.
 
@@ -1554,7 +1554,7 @@ def write_task_catalog(
     task's sites and the task file's own exclusions and roles. A later edit of
     task.yaml, a new build or a new decision shows after ``ml task catalog``.
     ``result``, when given, is left holding that choice: what was kept, and what was
-    left out and why.
+    left out and why. Returns the file written, and the catalog as read.
     """
     workspace.load_vocabulary(config)
     site = names.site(_task_site(config, spec))
@@ -1583,7 +1583,7 @@ def write_task_catalog(
         f"Task catalog: {len(table):,} parameters this task can use as input features",
         str(path),
     )
-    return path
+    return path, catalog_frame
 
 
 def _log_exclusions(
@@ -2327,11 +2327,12 @@ def _run(args) -> int:
         )
         catalog = None
         chosen = None
+        catalog_frame = None
         if found:
             try:
                 spec = taskconfig.load(path)
                 chosen = dataset.TaskResult(spec)
-                catalog = write_task_catalog(found, spec, chosen)
+                catalog, catalog_frame = write_task_catalog(found, spec, chosen)
             except Exception as exc:  # the task file stands; the list can be written later
                 chosen = None
                 log.warn(
@@ -2352,6 +2353,7 @@ def _run(args) -> int:
             shifting=shifting,
             shifting_built=built,
             result=chosen,
+            catalog=catalog_frame,
         )
         if not args.target:
             log.warn(
@@ -2389,7 +2391,7 @@ def _run(args) -> int:
         spec = taskconfig.load(task_file)
         config = _config(args, start=args.folder)
         chosen = dataset.TaskResult(spec)
-        write_task_catalog(config, spec, chosen)
+        _, catalog_frame = write_task_catalog(config, spec, chosen)
         report = exclusions.from_task_file(
             task=task_file.resolve().parent.name,
             file=str(task_file.resolve()),
@@ -2398,6 +2400,7 @@ def _run(args) -> int:
             target=spec.target.column,
             excludes=_task_file_excludes(task_file),
             result=chosen,
+            catalog=catalog_frame,
         )
         report.command = "ml task catalog"
         _write_exclusions(report, task_file.resolve(), mark)
