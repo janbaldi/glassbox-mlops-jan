@@ -108,7 +108,7 @@ catalog gains later is not on it; make the task again, or add the line.
 
 **What was left out, and why, is logged.** `ml task new` prints a report of every
 parameter the new task leaves out of its dataset, and writes the same report, without
-colour and followed by the command's log, to `task_new.log` in the task folder. It opens
+colour and followed by the command's log, to `excluded_parameters.log` in the task folder. It opens
 with the counts (catalog parameters, those in the batch table, those usable as
 predictors), then an overview with one line per group, then each group in full: its
 reason, and its parameters one per line. The groups are the screening register, each
@@ -123,6 +123,12 @@ several reasons is listed in each of its groups, with the others named beside it
     Why: the catalog says this Variable Role cannot explain how a batch turned out, or is known only at or after release
     - Start date            also: Dates and times
 ```
+
+After you edit `task.yaml`, `ml task catalog` writes `task_catalog.xlsx` and the log
+again, from the task file as it stands: a deleted line is gone from it, and a line you
+added by hand is under **Task file exclusions**, with the reason you gave. Screening
+decisions taken since the task was made, which every run applies, are under their own
+group. The log says which command wrote it, and when.
 
 **Date columns are left out by default**, every one the latest build's
 `dates.xlsx` holds at any subsite (manufacturing site, line and shift): a model fitted on a date learns when a batch was made

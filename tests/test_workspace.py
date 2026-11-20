@@ -516,12 +516,25 @@ def test_a_new_task_lists_every_parameter_the_catalog_defaults_leave_out(built, 
     assert any(role.get(p) == "Process parameter" for p in usable)
 
 
+def _left_out(text: str) -> dict[str, list[str]]:
+    """Group title → the parameters an excluded_parameters.log lists under it."""
+    groups: dict[str, list[str]] = {}
+    title = ""
+    for line in text.split("\n" + "-" * 72)[0].splitlines():
+        if line.startswith("["):
+            title = line.split("] ", 1)[1].rsplit(" (", 1)[0]
+            groups[title] = []
+        elif line.startswith("    - ") and title:
+            groups[title].append(line[6:].split("  ")[0].strip())
+    return groups
+
+
 def test_a_new_task_logs_what_it_leaves_out_and_why(built, tmp_path, caplog):
     folder = tmp_path / "logged"
     args = ["--config", str(built["config_path"]), "task", "new", str(folder)]
     assert cli.main(args) == 0
     printed = caplog.text
-    text = (folder / cli.TASK_NEW_LOG).read_text(encoding="utf-8")
+    text = (folder / cli.EXCLUSION_LOG).read_text(encoding="utf-8")
     spec = taskconfig.load(folder / "task.yaml")
     usable = set(pd.read_excel(folder / "task_catalog.xlsx")["Parameter"])
     # Screen and file say the same, the file without colour, and with the command's log.
@@ -530,16 +543,42 @@ def test_a_new_task_logs_what_it_leaves_out_and_why(built, tmp_path, caplog):
     assert "\033[" not in text
     assert "Log of ml task new" in text
     # Every parameter the task file leaves out is in the log, and none it can use.
-    listed = {
-        line.strip()[2:].split("  ")[0].strip()
-        for line in text.split("Log of ml task new")[0].splitlines()
-        if line.startswith("    - ")
-    }
+    made = _left_out(text)
+    listed = {p for members in made.values() for p in members}
     assert set(dict(spec.predictors.exclude)) <= listed
     assert not usable & listed
     # A parameter left out for two reasons names the other group.
     assert f"{c('date_start')}" in text and "also: Dates and times" in text
     assert "Why: the catalog says this Variable Role cannot explain" in text
+
+    # `ml task catalog` on the untouched task file: the same groups, the same parameters.
+    catalog_args = ["--config", str(built["config_path"]), "task", "catalog", str(folder)]
+    assert cli.main(catalog_args) == 0
+    again = (folder / cli.EXCLUSION_LOG).read_text(encoding="utf-8")
+    assert "by ml task catalog" in again and "Log of ml task catalog" in again
+    redone = _left_out(again)
+    made.pop("Catalog rules that left nothing out", None)  # its notes are the new task's own
+    assert {t: sorted(m) for t, m in redone.items()} == {t: sorted(m) for t, m in made.items()}
+
+    # After an edit: a deleted line puts a parameter back, a line by hand takes one out.
+    task_file = folder / "task.yaml"
+    back = c("incubator_id")
+    out = sorted(usable)[0]
+    lines = [
+        line
+        for line in task_file.read_text(encoding="utf-8").splitlines()
+        if f'column: "{back}"' not in line
+    ]
+    at = next(i for i, line in enumerate(lines) if line.strip().startswith("exclude:")) + 1
+    lines.insert(at, f'    - {{column: "{out}", reason: "measured with the old method"}}')
+    task_file.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    assert cli.main(catalog_args) == 0
+    edited = _left_out((folder / cli.EXCLUSION_LOG).read_text(encoding="utf-8"))
+    assert back not in {p for members in edited.values() for p in members}
+    assert edited["Task file exclusions"] == [out]
+    assert "measured with the old method" in (folder / cli.EXCLUSION_LOG).read_text(
+        encoding="utf-8"
+    )
 
 
 def test_a_column_listed_for_several_reasons_keeps_them_all(caplog):

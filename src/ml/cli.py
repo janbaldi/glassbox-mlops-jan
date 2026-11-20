@@ -123,8 +123,9 @@ BUILD_OUTPUTS = {
 LV_COA_TEST_LOTS = "lv_coa_test_lots.xlsx"
 #: Written next to a new task's task.yaml: the catalog rows it can use as input features.
 TASK_CATALOG = "task_catalog.xlsx"
-#: Written next to a new task's task.yaml: every parameter it leaves out, grouped by why.
-TASK_NEW_LOG = "task_new.log"
+#: Written next to a task's task.yaml by `ml task new` and `ml task catalog`: every
+#: parameter it leaves out of its dataset, grouped by why.
+EXCLUSION_LOG = "excluded_parameters.log"
 
 
 def _provenance(config: dict[str, Any], sources: list[provenance.Source]) -> dict:
@@ -1594,8 +1595,7 @@ def _log_exclusions(
     result: dataset.TaskResult | None,
     **found,
 ) -> Path:
-    """Print what the new task at ``path`` leaves out of its dataset, grouped by why, and
-    write the same to ``task_new.log`` beside it, with the log of ``ml task new``."""
+    """What the new task at ``path`` leaves out of its dataset: see :func:`_write_exclusions`."""
     report = exclusions.build(
         task=path.parent.name,
         file=str(path),
@@ -1608,10 +1608,30 @@ def _log_exclusions(
         result=result,
         **found,
     )
+    return _write_exclusions(report, path, mark)
+
+
+def _task_file_excludes(path: Path) -> list[tuple[str, str]]:
+    """A task file's ``predictors.exclude`` entries as written, one (column, reason) per
+    line: a parameter under several groups comes once per group, unlike the loaded spec,
+    which joins its reasons."""
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    entries = ((raw.get("predictors") or {}).get("exclude")) or []
+    return [
+        (str(e.get("column", "")), str(e.get("reason", "")))
+        for e in entries
+        if isinstance(e, dict) and e.get("column")
+    ]
+
+
+def _write_exclusions(report: exclusions.Report, path: Path, mark: int) -> Path:
+    """Print the report, grouped by why, and write it to ``excluded_parameters.log`` beside
+    the task file at ``path``, with the log of the command that made it."""
     log.lines(exclusions.render(report, log._paint))
-    target = path.parent / TASK_NEW_LOG
+    target = path.parent / EXCLUSION_LOG
+    rule = "-" * 72
     text = "\n".join(exclusions.render(report))
-    text += "\n\n" + "-" * 72 + "\nLog of ml task new\n" + "-" * 72 + "\n"
+    text += f"\n\n{rule}\nLog of {report.command}\n{rule}\n"
     text += _log_text(log.since(mark)) + "\n"
     target.write_text(text, encoding="utf-8")
     log.success(
@@ -2365,8 +2385,22 @@ def _run(args) -> int:
         task_file = Path(args.folder).expanduser() / TASK_FILE
         if not task_file.is_file():
             raise TaskConfigError(f"No {TASK_FILE} in {args.folder}: create one with `ml task new`")
+        mark = log.mark()
         spec = taskconfig.load(task_file)
-        write_task_catalog(_config(args, start=args.folder), spec)
+        config = _config(args, start=args.folder)
+        chosen = dataset.TaskResult(spec)
+        write_task_catalog(config, spec, chosen)
+        report = exclusions.from_task_file(
+            task=task_file.resolve().parent.name,
+            file=str(task_file.resolve()),
+            config=str(config["__path__"]),
+            site=spec.site or workspace.site_key(config),
+            target=spec.target.column,
+            excludes=_task_file_excludes(task_file),
+            result=chosen,
+        )
+        report.command = "ml task catalog"
+        _write_exclusions(report, task_file.resolve(), mark)
         return 0
 
     if command == "task rerun":

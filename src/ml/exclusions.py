@@ -5,7 +5,8 @@ register, the catalog's Variable Role and Functional Type, the dates and shifts 
 found, and — when its usable inputs are worked out — the task's roles, the target's
 lineage and the site-relative features. This module gathers them into groups, one per
 reason, and renders them as plain text: the console prints it with colour, and
-``task_new.log`` in the task folder keeps it without.
+``excluded_parameters.log`` in the task folder keeps it without. ``ml task catalog``
+writes it again from the task file as it stands, after an edit.
 
 A parameter left out for several reasons is listed in every group that leaves it out,
 with the other groups named beside it, so each group is complete and each line says
@@ -14,13 +15,30 @@ the whole story.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
+CATALOG_WHY = (
+    "the catalog says this {column} cannot explain how a batch turned out, or is known only "
+    "at or after release"
+)
+SCREENED_WHY = "screened out by a decision in the screening register at this site"
+DATES_WHY = (
+    "a model fitted on a date learns when a batch was made; the durations derived from the "
+    "dates stay usable"
+)
+SHIFTS_WHY = "run in groups over time at a manufacturing site, so a model would learn time"
+
 #: Run-time stages of :func:`ml.dataset.candidate_predictors`, as groups of the report.
-#: "task exclusion" and "screening" are not here: they are the task file's own groups.
+#: "task exclusion" is not here: those are the task file's own groups.
 STAGES = {
+    "screening": (
+        "Screening register, not listed in the task file",
+        "screened out by a decision the task file does not list (taken after the task was "
+        "made, or its line deleted); every run applies the register",
+    ),
     "role": (
         "Task roles",
         "the target, identifier, grouping and patient columns describe a batch; they are "
@@ -76,6 +94,8 @@ class Report:
     #: Whatever kept the report from being complete, in words.
     caveats: list[str] = field(default_factory=list)
     made: datetime = field(default_factory=datetime.now)
+    #: The command that wrote it.
+    command: str = "ml task new"
 
     def excluded(self) -> list[str]:
         """Every parameter some group leaves out, once each, in the order first met."""
@@ -114,8 +134,7 @@ def build(
     # ── The screening register ─────────────────────────────────────────────
     group = Group(
         "Screening register",
-        "screened out by a decision in the screening register at this site"
-        + (f" (last decision {screened_as_of})" if screened_as_of else ""),
+        SCREENED_WHY + (f" (last decision {screened_as_of})" if screened_as_of else ""),
         [(p, why) for p, why in screened],
     )
     group.notes += [f"CONFLICT: {line}" for line in conflicts]
@@ -123,10 +142,6 @@ def build(
         groups.append(group)
 
     # ── The catalog's Variable Role and Functional Type ────────────────────
-    catalog_why = (
-        "the catalog says this {column} cannot explain how a batch turned out, or is known "
-        "only at or after release"
-    )
     if catalog_groups is None:
         rules = catalog_rules or {}
         if rules:
@@ -150,7 +165,7 @@ def build(
                 groups.append(
                     Group(
                         f"Catalog {column}: {value}",
-                        catalog_why.format(column=column),
+                        CATALOG_WHY.format(column=column),
                         [(m, "") for m in members],
                     )
                 )
@@ -164,9 +179,7 @@ def build(
         groups.append(
             Group(
                 "Dates and times",
-                "a model fitted on a date learns when a batch was made; the durations derived "
-                "from the dates stay usable"
-                + (f" (as the build of {dated_built} found them)" if dated_built else ""),
+                DATES_WHY + (f" (as the build of {dated_built} found them)" if dated_built else ""),
                 [(p, why) for p, why in dated],
             )
         )
@@ -174,19 +187,13 @@ def build(
         groups.append(
             Group(
                 "Run in groups over time",
-                "run in groups over time at a manufacturing site, so a model would learn time"
+                SHIFTS_WHY
                 + (f" (as the build of {shifting_built} found them)" if shifting_built else ""),
                 [(p, why) for p, why in shifting],
             )
         )
 
-    # ── What a run leaves out besides, as the task's usable inputs found ───
-    if result is None:
-        report.caveats.append(
-            "The task's usable inputs were not worked out, so the target, the roles, the "
-            "target's lineage and parameters missing from the batch table are not listed"
-        )
-        return report
+    return _add_run_groups(report, result)
 
     listed = set(report.excluded())
     by_stage: dict[str, list[tuple[str, str]]] = {}
@@ -239,7 +246,7 @@ def render(report: Report, paint: Callable[..., str] = lambda text, *styles: tex
         ("Config", report.config or "none found"),
         ("Site", report.site or "not set"),
         ("Target", report.target or "not set (--target)"),
-        ("Made", report.made.strftime("%Y-%m-%d %H:%M:%S")),
+        ("Written", f"{report.made:%Y-%m-%d %H:%M:%S} by {report.command}"),
     ]
     if report.catalog_parameters is not None:
         facts += [
@@ -292,3 +299,95 @@ def render(report: Report, paint: Callable[..., str] = lambda text, *styles: tex
         out.append("")
         out.append("  Nothing is left out.")
     return out
+
+
+def from_task_file(
+    *,
+    task: str,
+    file: str,
+    config: str,
+    site: str,
+    target: str,
+    excludes: list[tuple[str, str]],
+    result=None,
+) -> Report:
+    """The report of an existing task, from its task file as it stands now.
+
+    ``excludes`` is the task file's ``predictors.exclude`` entries, one (column, reason)
+    each, as written: a parameter listed under several groups comes once per group. Each
+    reason is sorted into the group :func:`build` would have put it in, by its wording;
+    a reason written by hand goes under "Task file exclusions".
+    """
+    report = Report(task=task, file=file, config=config, site=site, target=target)
+    groups: dict[str, Group] = {}
+    catalog = re.compile(r"^catalog (?P<column>.+?) is '(?P<value>.*)'$")
+    for column, reason in excludes:
+        match = catalog.match(reason)
+        if match:
+            title = f"Catalog {match['column']}: {match['value']}"
+            why = CATALOG_WHY.format(column=match["column"])
+            detail = ""
+        elif reason.startswith("screened out by"):
+            title, why, detail = "Screening register", SCREENED_WHY, reason
+        elif reason.startswith("a date"):
+            title, why, detail = "Dates and times", DATES_WHY, reason
+        elif reason.startswith("runs in groups over time"):
+            title, why, detail = "Run in groups over time", SHIFTS_WHY, reason
+        else:
+            title = "Task file exclusions"
+            why = "listed in the task file's predictors.exclude, with the reason given there"
+            detail = reason
+        group = groups.setdefault(title, Group(title, why))
+        if all(p != column for p, _ in group.rows):
+            group.rows.append((column, detail))
+    order = ["Screening register"]
+    order += [t for t in groups if t.startswith("Catalog ")]
+    order += ["Dates and times", "Run in groups over time", "Task file exclusions"]
+    report.groups = [groups[t] for t in order if t in groups]
+    return _add_run_groups(report, result)
+
+
+def _add_run_groups(report: Report, result) -> Report:
+    """What a run leaves out besides the task file's groups, as the task's usable inputs
+    (``result``, a :class:`ml.dataset.TaskResult`) found, and the counts."""
+    groups = report.groups
+    if result is None:
+        report.caveats.append(
+            "The task's usable inputs were not worked out, so the target, the roles, the "
+            "target's lineage and parameters missing from the batch table are not listed"
+        )
+        return report
+
+    listed = set(report.excluded())
+    by_stage: dict[str, list[tuple[str, str]]] = {}
+    for decision in result.decisions:
+        if decision.decision != "excluded":
+            continue
+        stage = decision.stage
+        if stage in ("task exclusion", "screening") and decision.parameter in listed:
+            continue  # one of the task file's groups
+        if stage == "task exclusion":
+            stage = "other"
+        by_stage.setdefault(stage, []).append((decision.parameter, decision.reason))
+    for stage, (title, why) in STAGES.items():
+        if by_stage.get(stage):
+            groups.append(Group(title, why, by_stage.pop(stage)))
+    for stage, rows in by_stage.items():  # anything not foreseen still shows
+        title = "Other exclusions" if stage == "other" else f"Excluded at '{stage}'"
+        groups.append(Group(title, "left out when the usable inputs were worked out", rows))
+
+    if result.missing_from_batch_table:
+        groups.append(
+            Group(
+                "In the catalog, not in the batch table",
+                "the site's batch table has no such column, so there is nothing to use",
+                [(p, "") for p in result.missing_from_batch_table],
+            )
+        )
+    available = len(result.candidates) + sum(
+        1 for d in result.decisions if d.decision == "excluded"
+    )
+    report.in_batch_table = available
+    report.catalog_parameters = available + len(result.missing_from_batch_table)
+    report.usable = len(result.candidates)
+    return report
